@@ -1,11 +1,8 @@
 package game
 
 import "core:fmt"
-import rl "vendor:raylib"
 
 // This is a frame-dependent timer, i.e. it works by calling it every frame. It cannot function as an independent timer for any absolute passage of time that occurs between timer calls. State is updated primarily by `process_timer`
-
-// CSDR using a `dt` param instead of calling rl.GetFrameTime to make independent package
 
 Timer :: struct {
     id: string, // for debugging
@@ -89,13 +86,13 @@ clear_timer :: proc(timer: ^Timer) {
     timer.state = .Completed
 }
 
-process_timer :: proc(timer: ^Timer) -> bool {
+process_timer :: proc(timer: ^Timer, dt: f32) -> bool {
     if timer.state != .Running {
         return false
     }
 
 	if timer.interval_type == .Time {
-		timer.accum -= rl.GetFrameTime()
+		timer.accum -= dt
 	} else if timer.interval_type == .Tick {
 		timer.accum -= 1
 	}

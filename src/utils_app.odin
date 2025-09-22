@@ -12,8 +12,8 @@ begin_letterbox_rendering :: proc() {
 	camera := rl.Camera2D{
 		zoom = RENDER_TEXTURE_SCALE,
 		offset = { 
-			LOGICAL_SCREEN_WIDTH * RENDER_TEXTURE_SCALE / 2,
-			LOGICAL_SCREEN_HEIGHT * RENDER_TEXTURE_SCALE / 2
+			get_playfield_right() * RENDER_TEXTURE_SCALE,
+			f32(PLAYFIELD_LENGTH) / 2 + f32(TOPBAR_HEIGHT) / 2 * RENDER_TEXTURE_SCALE,
 		},
 	}
 	rl.BeginMode2D(camera)
