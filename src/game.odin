@@ -6,6 +6,7 @@ import "core:math/linalg"
 import "core:strings"
 import "core:math"
 import "core:time"
+import "core:math/noise"
 import sa "core:container/small_array"
 import rl "vendor:raylib"
 
@@ -85,6 +86,8 @@ Game_Memory :: struct {
 	torpedos: Torpedos,
 
 	n_rounds: i32,
+
+	starfield: Starfield,
 }
 
 Torpedos :: sa.Small_Array(MAX_LIVE_TORPEDOS, Torpedo)
@@ -95,6 +98,20 @@ Star :: struct {
 	rotation: f32,
 	rotation_rate: f32,
 	radius: f32,
+}
+
+Starfield_Star :: struct {
+	position: Position,
+	color: rl.Color,
+}
+
+MAX_STARFIELD_STARS :: 1024
+Starfield_Stars :: sa.Small_Array(MAX_STARFIELD_STARS, Starfield_Star)
+Starfield :: struct {
+	stars: Starfield_Stars,
+	period: f32,
+	timer: Timer,
+	velocity: Vec2,
 }
 
 App_State :: enum {
@@ -264,6 +281,16 @@ update :: proc() {
 update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 	scene := gm.scene.(Play_Scene)
 	process_play_input(&scene)
+
+	// update starfield
+	process_timer(&gm.starfield.timer, dt)
+	if is_timer_done(gm.starfield.timer) {
+		for &star in sa.slice(&gm.starfield.stars) {
+			star.position += gm.starfield.velocity * dt
+			wraparound(&star.position)
+		}
+		restart_timer(&gm.starfield.timer)
+	}
 
 	// Step physics and controls
 	for &player in gm.players {
@@ -477,11 +504,19 @@ draw_torpedos :: proc(torps: []Torpedo) {
 	}
 }
 
+draw_starfield :: proc(starfield_stars: Starfield_Stars) {
+	sf := starfield_stars
+	for star in sa.slice(&sf) {
+		rl.DrawCircleV(star.position, 1, star.color)
+	}
+}
+
 draw :: proc() {
 	begin_letterbox_rendering()
 
 	switch &s in g.scene {
 	case Play_Scene:
+		draw_starfield(g.starfield.stars)
 		for player in g.players {
 			if player.ship.ship_type == .Wedge {
 				draw_ship_wedge(player.ship)
@@ -521,23 +556,6 @@ draw :: proc() {
 	// ui text
 	rl.DrawText(fmt.ctprintf(""), 5, 5, 8, rl.BLUE)
 
-	// ship_type: Ship_Type,
-	// position: Position,
-	// velocity: Vec2,
-	// mass: f32,
-	// collision_circles: Collision_Circles,
-	// rotation: f32,
-	// color: rl.Color,
-	//
-	// fuel_count: i32,
-	// torpedo_count: i32,
-	// hyperspace_count: i32,
-	//
-	// is_thrusting: bool,
-	// is_hyperspacing: bool,
-	// is_firing: bool,
-	//
-	// rotating: Maybe(Ship_Rotation_Direction),
 	fs: i32 = 20
 	gap_x: i32 = 25
 	{
@@ -616,14 +634,71 @@ setup :: proc() -> bool {
 	// - update_starfield :: translate stars by heading
 	// - draw_starfield_star
 
+	// gen starfield using organic noise
+
+	starfield: Starfield
+	seed:i64= 6
+	sample_resolution: f32 = 64
+	noise_scale: f32 = 0.02
+	star_threshold: f32 = 0.0
+	init_starfield(&starfield, seed, get_playfield_left(), get_playfield_top(), PLAYFIELD_LENGTH, PLAYFIELD_LENGTH, sample_resolution, star_threshold, noise_scale)
+
 	g^ = Game_Memory {
 		resman = resman,
 		audman = audman,
 		render_texture = rl.LoadRenderTexture(LOGICAL_SCREEN_WIDTH * RENDER_TEXTURE_SCALE, LOGICAL_SCREEN_HEIGHT * RENDER_TEXTURE_SCALE),
 		app_state = .Running,
 		debug = true,
+		starfield = starfield,
 	}
 	return true
+}
+
+init_starfield :: proc(
+	starfield: ^Starfield,
+	seed: i64,
+	start_x, start_y: f32,
+	width, height: f32,
+	sample_resolution: f32 = 32.0,
+	star_threshold: f32 = 0.0,
+	noise_scale: f32 = 0.02
+) {
+	starfield_stars := &starfield.stars
+	for y := start_y; y < start_y + height; y += sample_resolution {
+		for x := start_x; x < start_x + width; x += sample_resolution {
+			noise_coord := [2]f64{
+				f64(x) * f64(noise_scale),
+				f64(y) * f64(noise_scale),
+			}
+			noise_val := noise.noise_2d(seed, noise_coord)
+
+			if noise_val > star_threshold {
+				JITTER_NOISE_SCALE_FACTOR :: 0.1
+				JITTER_SCALE_FACTOR :: 0.4
+				jitter_noise_x := noise.noise_2d(seed + 1000, 
+					{f64(x) * JITTER_NOISE_SCALE_FACTOR, 
+					f64(y) * JITTER_NOISE_SCALE_FACTOR})
+				jitter_noise_y := noise.noise_2d(seed + 2000, 
+					{f64(x) * JITTER_NOISE_SCALE_FACTOR, 
+					f64(y) * JITTER_NOISE_SCALE_FACTOR})
+
+				jitter_x := f32(jitter_noise_x) * sample_resolution * JITTER_SCALE_FACTOR
+				jitter_y := f32(jitter_noise_y) * sample_resolution * JITTER_SCALE_FACTOR
+				pos := Position{math.clamp(x + jitter_x, start_x, start_x + width),
+								math.clamp(y + jitter_y, start_y, start_y + height)}
+				sa.push(starfield_stars, Starfield_Star{position = pos, color = rl.WHITE})
+				if sa.len(starfield_stars^) > MAX_STARFIELD_STARS {
+					pr("WARN: exceeded max starfield stars of", MAX_STARFIELD_STARS)
+					break
+				}
+			}
+		}
+	}
+	starfield.period = 0.2
+	starfield.timer = create_timer(starfield.period)
+	starfield.velocity = {0.5,0.5}
+	start_timer(&starfield.timer)
+	pr("starfield count", sa.len(starfield_stars^))
 }
 
 // clear collections, set initial values
