@@ -7,6 +7,7 @@ import "core:strings"
 import "core:math"
 import "core:time"
 import "core:math/noise"
+import "core:math/rand"
 import sa "core:container/small_array"
 import rl "vendor:raylib"
 
@@ -36,9 +37,6 @@ TOPBAR_DEFAULT_TEXT_COLOR :: rl.WHITE
 
 PLAYFIELD_LENGTH :: LOGICAL_SCREEN_WIDTH
 
-GRAVITY_COEFFICIENT :: .0000000000667430
-GRAVITY_FORCE_MAX :: 1000000000000000
-
 CENTRAL_STAR_ROTATION_RATE :: 500
 CENTRAL_STAR_RADIUS :: 20
 CENTRAL_STAR_MASS :: 1000000000000000000000
@@ -52,6 +50,8 @@ SHIP_NEEDLE_COLLISION_CIRCLE_RADIUS :: 5
 SHIP_DEFAULT_ROTATION_RATE :: 4
 SHIP_DEFAULT_THRUST_FORCE :: 5000000000000
 SHIP_DEFAULT_TORPEDO_COOLDOWN :: 0.8
+SHIP_DEFAULT_HYPERSPACE_DURATION :: 3
+SHIP_DEFAULT_HYPERSPACE_COOLDOWN :: 12
 
 Player_ID :: enum {A,B}
 
@@ -86,6 +86,8 @@ Game_Memory :: struct {
 	torpedos: Torpedos,
 
 	n_rounds: i32,
+	end_round_duration_timer: Timer,
+	end_round_display: string,
 
 	starfield: Starfield,
 }
@@ -119,24 +121,9 @@ App_State :: enum {
 	Exit
 }
 
-Scene :: union {
-	// Menu_Scene,
-	Play_Scene,
-	// Game_Over_Scene,
-}
-
-Play_Scene :: struct {
-}
-
-should_game_over :: proc() -> bool {
-	return false
-}
-
-Entity :: struct {
-	pos: Position,
-	size: Vec2,
-	rotation: f32,
-	color: rl.Color,
+Scene :: enum {
+	Play,
+	End_Round,
 }
 
 Player :: struct {
@@ -169,10 +156,13 @@ Ship :: struct {
 	is_hyperspacing: bool,
 	is_firing: bool,
 
-	rotating: Maybe(Ship_Rotation_Direction),
 	torpedo_cooldown_timer: Timer,
 
 	is_destroyed: bool,
+	hyperspace_duration_timer: Timer,
+	hyperspace_cooldown_timer: Timer,
+
+	input: bit_set[Play_Input]
 }
 
 make_ship :: proc(ship_type: Ship_Type, position: Position = {-50, -50}, rotation: f32 = 0, mass: f32 = SHIP_DEFAULT_MASS) -> Ship {
@@ -189,7 +179,7 @@ make_ship :: proc(ship_type: Ship_Type, position: Position = {-50, -50}, rotatio
 		sa.push(&collision_circles, cc_wedge)
 
 	case .Needle:
-		cc_r :f32= SHIP_DEFAULT_RADIUS * 0.20
+		cc_r :f32= SHIP_DEFAULT_RADIUS * 0.35
 		cc_1 := Circle{
 			center = { 1.2 * SHIP_DEFAULT_RADIUS, 0 },
 			radius = cc_r,
@@ -231,9 +221,10 @@ make_ship :: proc(ship_type: Ship_Type, position: Position = {-50, -50}, rotatio
 		hyperspace_count = 0,
 
 		is_thrusting = false,
-		rotating = nil,
 		is_hyperspacing = false,
-		torpedo_cooldown_timer = create_timer(SHIP_DEFAULT_TORPEDO_COOLDOWN)
+		torpedo_cooldown_timer = create_timer(SHIP_DEFAULT_TORPEDO_COOLDOWN),
+		hyperspace_duration_timer = create_timer(SHIP_DEFAULT_HYPERSPACE_DURATION),
+		hyperspace_cooldown_timer = create_timer(SHIP_DEFAULT_HYPERSPACE_COOLDOWN)
 	}
 }
 
@@ -248,11 +239,16 @@ clear_torpedos :: proc(gm: ^Game_Memory) {
 	sa.clear(&gm.torpedos)
 }
 
-// TODO: delay before ending round -> let animations play out
-end_round :: proc(gm: ^Game_Memory) {
-	reset_players(gm)
-	clear_torpedos(gm)
+end_round :: proc(gm: ^Game_Memory, winner: Maybe(Player_ID)) {
 	gm.n_rounds += 1
+	gm.scene = .End_Round
+
+	if winner, ok := winner.?; ok {
+		ship_name := gm.players[winner].ship.ship_type
+		gm.end_round_display = fmt.aprintf("%v wins the round!", ship_name)
+	}
+
+	start_timer(&gm.end_round_duration_timer)
 }
 
 update :: proc() {
@@ -268,21 +264,25 @@ update :: proc() {
 	}
 
 	// next_scene: Maybe(Scene) = nil
-	switch &s in g.scene {
-	case Play_Scene:
+	switch g.scene {
+	case .Play:
 		update_play_scene(g, dt)
-	case:
-	}
+	case .End_Round:
+		process_timer(&g.end_round_duration_timer, dt)
+		if is_timer_done(g.end_round_duration_timer) {
+			reset_timer(&g.end_round_duration_timer)
+			g.end_round_display = ""
 
-	// update_central_star
-	g.central_star.rotation += g.central_star.rotation_rate * dt
+			// reset_playfield_objects ??
+			reset_players(g)
+			clear_torpedos(g)
+
+			g.scene = .Play
+		}
+	}
 }
 
-update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
-	scene := gm.scene.(Play_Scene)
-	process_play_input(&scene)
-
-	// update starfield
+update_starfield :: proc(gm: ^Game_Memory, dt: f32) {
 	process_timer(&gm.starfield.timer, dt)
 	if is_timer_done(gm.starfield.timer) {
 		for &star in sa.slice(&gm.starfield.stars) {
@@ -291,6 +291,12 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 		}
 		restart_timer(&gm.starfield.timer)
 	}
+}
+
+update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
+	process_play_input(gm)
+
+	update_starfield(gm, dt)
 
 	// Step physics and controls
 	for &player in gm.players {
@@ -315,7 +321,7 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 		if circle_intersects(cc_a.center + ship_a.position, cc_a.radius, cc_b.center + ship_b.position, cc_b.radius) {
 			destroy_ship(&gm.players[.A].ship)
 			destroy_ship(&gm.players[.B].ship)
-			end_round(gm)
+			end_round(gm, nil)
 			break
 		}
 	}
@@ -325,14 +331,14 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 		for cc_b in sa.slice(&g.players[.B].ship.collision_circles) {
 			if circle_intersects(torp.position, torp.radius, cc_b.center + ship_b.position, cc_b.radius) {
 				destroy_ship(&gm.players[.B].ship)
-				end_round(gm)
+				end_round(gm, .A)
 				gm.scores[.A] += 1
 				break torp_collide_outer
 			}
 		}
 		if circle_intersects(torp.position, torp.radius, cc_a.center + ship_a.position, cc_a.radius) {
 			destroy_ship(&gm.players[.A].ship)
-			end_round(gm)
+			end_round(gm, .B)
 			gm.scores[.B] += 1
 			break torp_collide_outer
 		}
@@ -344,10 +350,7 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 		destroy_torpedo(&gm.torpedos, index)
 	}
 
-	if should_game_over() {
-		unreachable()
-		// next_scene = Game_Over_Scene{}
-	}
+	g.central_star.rotation += g.central_star.rotation_rate * dt
 }
 
 destroy_ship :: proc(ship: ^Ship) {
@@ -388,9 +391,9 @@ draw_ship_wedge :: proc(ship: Ship) {
 	rl.DrawTriangle(pos_nose, pos_left, pos_right, rl.WHITE)
 }
 
+SHIP_NEEDLE_RADIUS_FACTOR :: 1.5
+SHIP_WEDGE_RADIUS_FACTOR :: 1.25
 get_nose_position :: proc(ship: Ship) -> Position {
-	SHIP_NEEDLE_RADIUS_FACTOR :: 1.5
-	SHIP_WEDGE_RADIUS_FACTOR :: 1.25
 	ship_type_radius_factor: f32
 	switch ship.ship_type {
 	case .Needle:
@@ -481,6 +484,14 @@ get_playfield_right :: proc() -> f32 {
 	return f32(PLAYFIELD_LENGTH) / 2
 }
 
+get_playfield_width :: proc() -> f32 {
+	return PLAYFIELD_LENGTH
+}
+
+get_playfield_height :: proc() -> f32 {
+	return  PLAYFIELD_LENGTH
+}
+
 draw_topbar :: proc() {
 	topbar_width := i32(math.round(f32(LOGICAL_SCREEN_WIDTH)))
 	topbar_height := i32(math.round(f32(TOPBAR_HEIGHT)))
@@ -498,8 +509,9 @@ draw_debug_origin_axes :: proc() {
 	rl.DrawLine(0, i32(get_playfield_top()), 0, i32(get_playfield_bottom()), rl.BLUE)
 }
 
-draw_torpedos :: proc(torps: []Torpedo) {
-	for torp in torps {
+draw_torpedos :: proc(torps: Torpedos) {
+	ts := torps
+	for torp in sa.slice(&ts) {
 		rl.DrawCircle(i32(torp.position.x), i32(torp.position.y), torp.radius, TORPEDO_COLOR)
 	}
 }
@@ -511,65 +523,81 @@ draw_starfield :: proc(starfield_stars: Starfield_Stars) {
 	}
 }
 
-draw :: proc() {
-	begin_letterbox_rendering()
-
-	switch &s in g.scene {
-	case Play_Scene:
-		draw_starfield(g.starfield.stars)
-		for player in g.players {
-			if player.ship.ship_type == .Wedge {
-				draw_ship_wedge(player.ship)
-			} else if player.ship.ship_type == .Needle {
-				draw_ship_needle(player.ship)
-			}
-		}
-
-		draw_topbar()
-		// draw_star(g.central_star)
-
-		draw_torpedos(sa.slice(&g.torpedos))
-
-		if g.debug {
-			// origin lines
-			draw_debug_origin_axes()
-
-			for player in g.players {
-				ship_pos := player.ship.position
-				rot := player.ship.rotation
-				cc := player.ship.collision_circles
-				for circle in sa.slice(&cc) {
-					// circle center is already relative to ship's position, circle.center.x is relative to ship's position and oriented wrt to ship with zero rotation, thus x is horizontal or longitudinal wrt ship, y is vertical or perpendicular wrt to ship's longitude
-					x := ship_pos.x + circle.center.x * math.cos(rot) - circle.center.y * math.sin(rot)
-					y := ship_pos.y + circle.center.x * math.sin(rot) + circle.center.y * math.sin(rot)
-					rl.DrawCircleLines(i32(x), i32(y), circle.radius, rl.GREEN)
-				}
-			}
-		}
-
-		if g.pause {
-			rl.DrawRectangle(0, 0, 90, 90, {0, 0, 0, 180})
-			rl.DrawText("PAUSED", 90, 90, 30, rl.WHITE)
+// TODO: rename to draw_playfield
+draw_play_scene :: proc(gm: Game_Memory) {
+	draw_starfield(gm.starfield.stars)
+	for player in gm.players {
+		if player.ship.ship_type == .Wedge {
+			draw_ship_wedge(player.ship)
+		} else if player.ship.ship_type == .Needle {
+			draw_ship_needle(player.ship)
 		}
 	}
 
-	// ui text
-	rl.DrawText(fmt.ctprintf(""), 5, 5, 8, rl.BLUE)
+	draw_topbar()
+	// draw_star(g.central_star)
+	draw_torpedos(gm.torpedos)
+}
+
+draw_end_round :: proc(gm: Game_Memory) {
+	cstr := fmt.ctprintf(gm.end_round_display)
+	text_length := rl.MeasureText(cstr, 32)
+	x := get_playfield_left() + get_playfield_width() / 2 - f32(text_length) / 2
+	y := get_playfield_top() + get_playfield_height() / 2 - 32
+	rl.DrawText(cstr, i32(x), i32(y), 32, rl.RED)
+}
+
+draw :: proc() {
+	begin_letterbox_rendering()
+
+	switch g.scene {
+	case .Play:
+		draw_play_scene(g^)
+	case .End_Round:
+		draw_play_scene(g^)
+		draw_end_round(g^)
+	}
+
+	if g.debug {
+		// origin lines
+		draw_debug_origin_axes()
+
+		for player in g.players {
+			ship_pos := player.ship.position
+			rot := player.ship.rotation
+			cc := player.ship.collision_circles
+			for circle in sa.slice(&cc) {
+				// circle center is already relative to ship's position, circle.center.x is relative to ship's position and oriented wrt to ship with zero rotation, thus x is horizontal or longitudinal wrt ship, y is vertical or perpendicular wrt to ship's longitude
+				x := ship_pos.x + circle.center.x * math.cos(rot) - circle.center.y * math.sin(rot)
+				y := ship_pos.y + circle.center.x * math.sin(rot) + circle.center.y * math.sin(rot)
+				rl.DrawCircleLines(i32(x), i32(y), circle.radius, rl.GREEN)
+			}
+		}
+	}
+
+	if g.pause {
+		rl.DrawRectangle(0, 0, 90, 90, {0, 0, 0, 180})
+		rl.DrawText("PAUSED", 90, 90, 30, rl.WHITE)
+	}
 
 	fs: i32 = 20
 	gap_x: i32 = 25
+	gap_y: i32 = 20
 	{
 		// player a
 		ship := g.players[.A].ship
 		x: i32 = i32(get_screen_left()) + 10
 		y: i32 = i32(get_screen_top()) + 5
 
-		torp_count := fmt.ctprintf("torpedos: %v", ship.torpedo_count)
-		rl.DrawText(torp_count, x, y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
+		torp_display := fmt.ctprintf("torpedos: %v", ship.torpedo_count)
+		rl.DrawText(torp_display, x, y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
 
-		x += rl.MeasureText(torp_count, fs) + gap_x
-		fuel_count := fmt.ctprintf("fuel: %v%%", ship.fuel_count)
-		rl.DrawText(fuel_count, x, y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
+		hyperspace_display := fmt.ctprintf("hyperspace jumps: %v", ship.hyperspace_count)
+		rl.DrawText(hyperspace_display, x, y + gap_y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
+
+		x += rl.MeasureText(torp_display, fs) + gap_x
+		fuel_display := fmt.ctprintf("fuel: %v%%", ship.fuel_count)
+		rl.DrawText(fuel_display, x, y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
 	}
 
 	{
@@ -578,12 +606,15 @@ draw :: proc() {
 		x: i32 = i32(get_screen_right()) - 300
 		y: i32 = i32(get_screen_top()) + 5
 
-		torp_count := fmt.ctprintf("torpedos: %v", ship.torpedo_count)
-		rl.DrawText(torp_count, x, y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
+		torp_display := fmt.ctprintf("torpedos: %v", ship.torpedo_count)
+		rl.DrawText(torp_display, x, y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
 
-		x += rl.MeasureText(torp_count, fs) + gap_x
-		fuel_count := fmt.ctprintf("fuel: %v%%", ship.fuel_count)
-		rl.DrawText(fuel_count, x, y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
+		hyperspace_display := fmt.ctprintf("hyperspace jumps: %v", ship.hyperspace_count)
+		rl.DrawText(hyperspace_display, x, y + gap_y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
+
+		x += rl.MeasureText(torp_display, fs) + gap_x
+		fuel_display := fmt.ctprintf("fuel: %v%%", ship.fuel_count)
+		rl.DrawText(fuel_display, x, y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
 	}
 
 
@@ -641,19 +672,32 @@ setup :: proc() -> bool {
 	sample_resolution: f32 = 64
 	noise_scale: f32 = 0.02
 	star_threshold: f32 = 0.0
-	init_starfield(&starfield, seed, get_playfield_left(), get_playfield_top(), PLAYFIELD_LENGTH, PLAYFIELD_LENGTH, sample_resolution, star_threshold, noise_scale)
+	init_starfield(&starfield, 
+				   seed, 
+				   get_playfield_left(), 
+				   get_playfield_top(), 
+				   PLAYFIELD_LENGTH, 
+				   PLAYFIELD_LENGTH, 
+				   sample_resolution, 
+				   star_threshold, 
+				   noise_scale)
 
 	g^ = Game_Memory {
 		resman = resman,
 		audman = audman,
-		render_texture = rl.LoadRenderTexture(LOGICAL_SCREEN_WIDTH * RENDER_TEXTURE_SCALE, LOGICAL_SCREEN_HEIGHT * RENDER_TEXTURE_SCALE),
+		render_texture = rl.LoadRenderTexture(LOGICAL_SCREEN_WIDTH * RENDER_TEXTURE_SCALE, 
+											  LOGICAL_SCREEN_HEIGHT * RENDER_TEXTURE_SCALE),
 		app_state = .Running,
 		debug = true,
 		starfield = starfield,
+		end_round_duration_timer = create_timer(6),
+		end_round_display = "",
 	}
 	return true
 }
 
+JITTER_NOISE_SCALE_FACTOR :: 0.1
+JITTER_SCALE_FACTOR :: 0.4
 init_starfield :: proc(
 	starfield: ^Starfield,
 	seed: i64,
@@ -673,8 +717,6 @@ init_starfield :: proc(
 			noise_val := noise.noise_2d(seed, noise_coord)
 
 			if noise_val > star_threshold {
-				JITTER_NOISE_SCALE_FACTOR :: 0.1
-				JITTER_SCALE_FACTOR :: 0.4
 				jitter_noise_x := noise.noise_2d(seed + 1000, 
 					{f64(x) * JITTER_NOISE_SCALE_FACTOR, 
 					f64(y) * JITTER_NOISE_SCALE_FACTOR})
@@ -698,7 +740,6 @@ init_starfield :: proc(
 	starfield.timer = create_timer(starfield.period)
 	starfield.velocity = {0.5,0.5}
 	start_timer(&starfield.timer)
-	pr("starfield count", sa.len(starfield_stars^))
 }
 
 // clear collections, set initial values
@@ -707,7 +748,7 @@ init :: proc() -> bool {
 		log.error("Failed to initialize app state, Game_Memory nil")
 		return false
 	}
-	g.scene = Play_Scene{}
+	g.scene = .Play
 
 	player_a: Player
 	init_player(&player_a, .Wedge, {-50, -50})
@@ -729,11 +770,6 @@ init :: proc() -> bool {
 
 	g.n_rounds = 1
 
-	// test that playfield width and height are same
-	// w := get_playfield_right() - get_playfield_left()
-	// h := get_playfield_bottom() - get_playfield_top()
-	// pr("playfield w", w)
-	// pr("playfield h", h)
 	return true
 }
 
@@ -892,7 +928,7 @@ Play_Input :: enum {
 	Hyperspace,
 }
 
-process_play_input :: proc(s: ^Play_Scene) {
+process_play_input :: proc(gm: ^Game_Memory) {
 	input: bit_set[Play_Input]
 
 	if rl.IsKeyDown(.S) {
@@ -911,42 +947,24 @@ process_play_input :: proc(s: ^Play_Scene) {
 		input += {.Hyperspace}
 	}
 
-	player := &g.players[.A]
+	ship := &g.players[.A].ship
+
+	ship.input = input
 
 	// Set necessary state here, including for render
-	player.ship.is_thrusting = false
-	if .Thrust in input {
-		player.ship.is_thrusting = true
-	}
-
-	player.ship.rotating = nil
-	if .Rotate_Left in input {
-		player.ship.rotating = .Left
-	} 
-	if .Rotate_Right in input {
-		player.ship.rotating = .Right
-	}
-
-	if .Hyperspace in input {
-		player.ship.is_hyperspacing = true
-	}
-
-	player.ship.is_firing = false
-	if .Fire in input {
-		player.ship.is_firing = true
-	}
+	ship.is_thrusting = false
+	ship.is_hyperspacing = false
+	ship.is_firing = false
 }
 
 apply_ship_physics :: proc(ship: ^Ship, dt: f32) {
-	if rotation, rotation_ok := ship.rotating.?; rotation_ok {
-		if rotation == .Left {
-			ship.rotation -= SHIP_DEFAULT_ROTATION_RATE * dt
-		} else {
-			ship.rotation += SHIP_DEFAULT_ROTATION_RATE * dt
-		}
+	if .Rotate_Left in ship.input {
+		ship.rotation -= SHIP_DEFAULT_ROTATION_RATE * dt
+	} else if .Rotate_Right in ship.input {
+		ship.rotation += SHIP_DEFAULT_ROTATION_RATE * dt
 	}
 
-	if ship.is_thrusting == true {
+	if .Thrust in ship.input {
 		heading := Vec2{
 			math.cos(ship.rotation),
 			math.sin(ship.rotation),
@@ -962,9 +980,49 @@ apply_ship_physics :: proc(ship: ^Ship, dt: f32) {
 		d_vel := acc * dt
 
 		ship.velocity += d_vel
+		ship.is_thrusting = true
 	}
+
+	process_timer(&ship.hyperspace_cooldown_timer, dt)
+
+
+	if .Hyperspace in ship.input {
+		if is_timer_done(ship.hyperspace_cooldown_timer) {
+			// hyperspace start anim
+			// start timer
+			// hyperspace end anim
+			// move ship to rand pos
+			if !is_timer_running(ship.hyperspace_duration_timer) {
+				start_timer(&ship.hyperspace_duration_timer)
+				ship.is_hyperspacing = true
+			}
+
+			process_timer(&ship.hyperspace_duration_timer, dt)
+
+			if is_timer_done(ship.hyperspace_duration_timer) {
+				rng_1 := rand.float32()
+				rng_2 := rand.float32()
+				w := get_playfield_width()
+				h := get_playfield_height()
+
+				possible_length_ratio: f32 = 0.85
+				rand_x := get_playfield_left() + w * (1.0 - possible_length_ratio) + rng_1 * w * possible_length_ratio
+				rand_y := get_playfield_top() + h * (1.0 - possible_length_ratio) + rng_2 * get_playfield_height() * possible_length_ratio
+
+				ship.position.x = rand_x
+				ship.position.y = rand_y
+				ship.velocity = {}
+
+				restart_timer(&ship.hyperspace_cooldown_timer)
+				ship.is_hyperspacing = false
+			}
+		}
+	}
+
 }
 
+GRAVITY_COEFFICIENT :: .0000000000667430
+GRAVITY_FORCE_MAX :: 1000000000000000
 METERS_PER_LOGICAL_UNIT_LENGTH :: 10000000
 force_of_gravity :: proc(pos_ship: Vec2, pos_star: Vec2, mass_ship: f32, mass_star: f32) -> Vec2 {
 	d_pos := pos_star - pos_ship
@@ -987,6 +1045,7 @@ Ship_Type :: enum{Wedge, Needle}
 init_player :: proc(p: ^Player, ship_type: Ship_Type, position: Position = {}) {
 	p.ship = make_ship(ship_type, position)
 	start_timer(&p.ship.torpedo_cooldown_timer)
+	start_timer(&p.ship.hyperspace_cooldown_timer)
 }
 
 draw_sprite :: proc(texture_id: Texture_ID, pos: Vec2, size: Vec2, rotation: f32 = 0, scale: f32 = 1, tint: rl.Color = rl.WHITE) {
@@ -1031,6 +1090,8 @@ draw_debug_overlay :: proc() {
 			x: i32 = 5
 			y: i32 = 40
 
+			rotating := .Rotate_Left in ship.input ? "Left" : .Rotate_Right in ship.input ? "Right" : "nil"
+
 			arr := [?]string{
 				fmt.tprintf("A"),
 				fmt.tprintf("vel: %v", ship.velocity),
@@ -1042,7 +1103,7 @@ draw_debug_overlay :: proc() {
 				fmt.tprintf("hyperspace_count: %v", ship.hyperspace_count),
 				fmt.tprintf("is_thrusting: %v", ship.is_thrusting),
 				fmt.tprintf("is_firing: %v", ship.is_firing),
-				fmt.tprintf("rotating: %v", ship.rotating),
+				fmt.tprintf("rotating: %v", rotating),
 				fmt.tprintf("is_hyperspacing: %v", ship.is_hyperspacing),
 				fmt.tprintf("is_destroyed: %v", ship.is_destroyed),
 			}
@@ -1052,6 +1113,8 @@ draw_debug_overlay :: proc() {
 			ship := g.players[.B].ship
 			x: i32 = 5
 			y: i32 = 400
+
+			rotating := .Rotate_Left in ship.input ? "Left" : .Rotate_Right in ship.input ? "Right" : "nil"
 
 			arr := [?]string{
 				fmt.tprintf("B"),
@@ -1063,7 +1126,7 @@ draw_debug_overlay :: proc() {
 				fmt.tprintf("torp_count: %v", ship.torpedo_count),
 				fmt.tprintf("hyperspace_count: %v", ship.hyperspace_count),
 				fmt.tprintf("is_thrusting: %v", ship.is_thrusting),
-				fmt.tprintf("rotating: %v", ship.rotating),
+				fmt.tprintf("rotating: %v", rotating),
 				fmt.tprintf("is_hyperspacing: %v", ship.is_hyperspacing),
 				fmt.tprintf("is_destroyed: %v", ship.is_destroyed),
 			}
@@ -1094,13 +1157,13 @@ update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, dt: f32) {
 	wraparound(&ship.position)
 
 	process_timer(&ship.torpedo_cooldown_timer, dt) 
-	if ship.is_firing {
+	if .Fire in ship.input {
 		if is_timer_done(ship.torpedo_cooldown_timer) {
 			pos_nose := get_nose_position(ship^)
 			torp_vel := ship.velocity + TORPEDO_SPEED * vector_from_rotation(ship.rotation)
-			pr("pos nose", pos_nose)
 			spawn_torpedo(gm, pos_nose, torp_vel)
 			restart_timer(&ship.torpedo_cooldown_timer)
+			ship.is_firing = true
 		}
 	}
 }
