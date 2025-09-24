@@ -6,7 +6,8 @@ LETTERBOX_COLOR :: rl.DARKGRAY
 
 begin_letterbox_rendering :: proc() {
 	rl.BeginTextureMode(g.render_texture)
-	rl.ClearBackground(BACKGROUND_COLOR)
+	// rl.ClearBackground(BACKGROUND_COLOR)
+	rl.DrawRectangle(0,0,LOGICAL_SCREEN_WIDTH,LOGICAL_SCREEN_HEIGHT, rl.Fade(rl.BLACK, 0.08))
 	
 	// Scale all drawing by RENDER_TEXTURE_SCALE for higher resolution
 	camera := rl.Camera2D{
@@ -35,7 +36,12 @@ end_letterbox_rendering :: proc() {
 	render_texture_height: f32 = LOGICAL_SCREEN_HEIGHT * RENDER_TEXTURE_SCALE
 	src := Rect{0, 0, render_texture_width, -render_texture_height} // negative height flips texture
 	dst := Rect{-offset_x, -offset_y, viewport_width, viewport_height}
+
+	rl.BeginShaderMode(g.shaders[.FX_Bloom])
+	// rl.BeginShaderMode(g.shaders[.FX_Fade_Threshold])
 	rl.DrawTexturePro(g.render_texture.texture, src, dst, {}, 0, rl.WHITE)
+	// rl.EndShaderMode()
+	rl.EndShaderMode()
 	// rl.EndDrawing() // moved outside for debug overlay
 }
 
