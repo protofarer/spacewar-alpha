@@ -60,7 +60,7 @@ TORPEDO_LIFESPAN :: 4 * time.Second
 TORPEDO_RADIUS :: 2
 TORPEDO_COLOR :: rl.RED
 
-END_ROUND_DURATION :: 6
+END_ROUND_DURATION :: 4
 
 Game_Memory :: struct {
 	app_state: App_State,
@@ -185,27 +185,58 @@ get_ship_by_ship_type :: proc(gm: Game_Memory, ship_type: Ship_Type) -> (ship: S
 	return {}, false
 }
 
-THRUST_PARTICLE_DEFAULT_SPEED :: 150
-THRUST_PARTICLE_LIFETIME :: 1.25
-spawn_thrust_particle :: proc(ps: ^Particle_System, pe: Particle_Emitter) {
+spawn_particle :: proc(ps: ^Particle_System, p: Particle) {
+	if !can_spawn_particle(ps^) do return
+
 	particle_count := sa.len(ps.particles)
 	if particle_count >= MAX_PARTICLES do return
+	sa.push(&ps.particles, p)
+}
 
+can_spawn_particle :: proc(ps: Particle_System) -> bool {
+	particle_count := sa.len(ps.particles)
+	if particle_count >= MAX_PARTICLES {
+		return false
+	}
+	return true
+}
+
+THRUST_PARTICLE_DEFAULT_SPEED :: 150
+THRUST_PARTICLE_LIFETIME :: 1.25
+THRUST_EMITTER_BURST_COUNT :: 10
+spawn_thrust_particle :: proc(ps: ^Particle_System, pe: Particle_Emitter) {
 	p: Particle
 	p.type = .Thrust
-	p.velocity = Vec2{THRUST_PARTICLE_DEFAULT_SPEED * math.cos(pe.rotation),
-				THRUST_PARTICLE_DEFAULT_SPEED * math.sin(pe.rotation)}
+
+	exhaust_speed := THRUST_PARTICLE_DEFAULT_SPEED - rand.float32() * 30
+	p.velocity = Vec2{exhaust_speed * math.cos(pe.rotation),
+					  exhaust_speed * math.sin(pe.rotation)}
 	// TODO: jitter
 
-	p.position = pe.position
-	// TODO: jitter
+	// spread is perpendicular to exhaust
+	spread := (rand.float32() - 0.5) * 8
+	offset := Vec2{0, spread}
+	rotated_offset := rotate_vec2(offset, pe.rotation)
+	p.position = pe.position + rotated_offset
 
 	p.lifetime = 0
-	p.max_lifetime = THRUST_PARTICLE_LIFETIME
-	// TODO: jitter
+	p.max_lifetime = THRUST_PARTICLE_LIFETIME + rand.float32() * 0.08
 
-	// TODO: spawn along thrust line, loop until spawn_rate achieved
-	sa.push(&ps.particles, p)
+	p.color = rl.Color{255, 
+					   u8(150 + rand.float32() * 80), 
+					   u8(30 + rand.float32() * 50), 
+					   255}
+
+	spawn_particle(ps, p)
+}
+
+spawn_thrust_particles :: proc(ps: ^Particle_System, pe: ^Particle_Emitter) {
+	if !can_spawn_particle(ps^) do return
+
+	for i := 0; i < THRUST_EMITTER_BURST_COUNT && sa.len(ps.particles) < MAX_PARTICLES; i += 1 {
+		spawn_thrust_particle(ps, pe^)
+	}
+
 }
 
 update_emitters :: proc(gm: ^Game_Memory, dt: f32) {
@@ -1054,6 +1085,7 @@ update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, dt: f32) {
 			pos_nose := get_ship_nose_position(ship^)
 			torp_vel := ship.velocity + TORPEDO_SPEED * vector_from_rotation(ship.rotation)
 			spawn_torpedo(gm, pos_nose, torp_vel)
+			ship.torpedo_count -= 1
 			restart_timer(&ship.torpedo_cooldown_timer)
 			ship.is_firing = true
 		}
@@ -1494,7 +1526,7 @@ draw_playfield :: proc(gm: Game_Memory) {
 
 	particles := gm.particle_system.particles
 	for particle in sa.slice(&particles) {
-		rl.DrawPixel(i32(particle.position.x), i32(particle.position.y), rl.BLUE)
+		rl.DrawPixel(i32(particle.position.x), i32(particle.position.y), particle.color)
 	}
 	// rl.EndBlendMode()
 
@@ -1508,4 +1540,10 @@ draw_end_round :: proc(gm: Game_Memory) {
 	x := get_playfield_left() + get_playfield_width() / 2 - f32(text_length) / 2
 	y := get_playfield_top() + get_playfield_height() / 2 - 64
 	rl.DrawText(cstr, i32(x), i32(y), 32, rl.RED)
+}
+
+rotate_vec2 :: proc(v: Vec2, angle: f32) -> Vec2 {
+	rot_matrix := linalg.matrix2_rotate(angle)
+	result := rot_matrix * v
+	return result
 }
