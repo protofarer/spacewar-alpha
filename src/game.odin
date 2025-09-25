@@ -85,7 +85,7 @@ Game_Memory :: struct {
 	shaders: Shaders,
 
 	bloom_shader_data: Bloom_Shader,
-	particle_system: Particle_System,
+	particle_system: ^Particle_System,
 }
 
 App_State :: enum {
@@ -100,80 +100,6 @@ Shader_Kind :: enum {
 	FX_Bloom,
 }
 
-// For: thrust, ship destruction, hyperspace
-Particle :: struct {
-	type: Particle_Type,
-	position, velocity: Vec2,
-	color: rl.Color,
-	lifetime: f32,
-	max_lifetime: f32,
-}
-
-Particle_Type :: enum { 
-	Thrust,
-	// Explosion,
-	// Sparkle,
-}
-
-MAX_PARTICLES :: 4096
-Particle_Emitter :: struct {
-	type: Particle_Type,
-	active: bool,
-
-	position: Vec2,
-	rotation: f32,
-
-	// Timing
-	spawn_timer: Timer, // if no timer, then one-time spawn
-	spawn_rate: f32, // partcles/sec
-	lifetime: f32,
-	max_lifetime: f32,
-}
-
-Particle_System :: struct {
-	particles: sa.Small_Array(MAX_PARTICLES, Particle),
-	// emitters: sa.Small_Array(MAX_EMITTERS, Particle_Emitter),
-	thrust_emitters: [Ship_Type]Particle_Emitter,
-}
-
-update_particle_system :: proc(gm: ^Game_Memory, dt: f32) {
-	update_emitters(gm, dt)
-	update_particles(&gm.particle_system, dt)
-}
-
-update_particles :: proc(ps: ^Particle_System, dt: f32) {
-	// swap and pop removal
-	i := 0
-	particles := sa.slice(&ps.particles)
-
-	for i < len(particles) {
-		p := &particles[i]
-		p.lifetime += dt
-
-		if p.lifetime >= p.max_lifetime {
-			sa.unordered_remove(&ps.particles, i)
-			particles = sa.slice(&ps.particles)
-			continue
-		} 
-
-		// linear fade
-		life_ratio := p.lifetime / p.max_lifetime
-		alpha := (1.0 - life_ratio)
-		// CSDR fade curve (tween)
-		// CSDR flicker
-		p.color.a = u8(255.0 * alpha)
-
-		switch p.type {
-		case .Thrust:
-			// update_thrust_particle(&p, dt)
-			p.velocity *= 0.98
-		case:
-		}
-
-		p.position += p.velocity * dt
-		i += 1
-	}
-}
 
 get_ship_by_ship_type :: proc(gm: Game_Memory, ship_type: Ship_Type) -> (ship: Ship, ok: bool) {
 	for player in gm.players {
@@ -184,126 +110,6 @@ get_ship_by_ship_type :: proc(gm: Game_Memory, ship_type: Ship_Type) -> (ship: S
 	pr("ERROR: no ship exists for ship_type", ship_type)
 	return {}, false
 }
-
-spawn_particle :: proc(ps: ^Particle_System, p: Particle) {
-	if !can_spawn_particle(ps^) do return
-
-	particle_count := sa.len(ps.particles)
-	if particle_count >= MAX_PARTICLES do return
-	sa.push(&ps.particles, p)
-}
-
-can_spawn_particle :: proc(ps: Particle_System) -> bool {
-	particle_count := sa.len(ps.particles)
-	if particle_count >= MAX_PARTICLES {
-		return false
-	}
-	return true
-}
-
-THRUST_PARTICLE_DEFAULT_SPEED :: 150
-THRUST_PARTICLE_LIFETIME :: 1.25
-THRUST_EMITTER_BURST_COUNT :: 10
-spawn_thrust_particle :: proc(ps: ^Particle_System, pe: Particle_Emitter) {
-	p: Particle
-	p.type = .Thrust
-
-	exhaust_speed := THRUST_PARTICLE_DEFAULT_SPEED - rand.float32() * 30
-	p.velocity = Vec2{exhaust_speed * math.cos(pe.rotation),
-					  exhaust_speed * math.sin(pe.rotation)}
-	// TODO: jitter
-
-	// spread is perpendicular to exhaust
-	spread := (rand.float32() - 0.5) * 8
-	offset := Vec2{0, spread}
-	rotated_offset := rotate_vec2(offset, pe.rotation)
-	p.position = pe.position + rotated_offset
-
-	p.lifetime = 0
-	p.max_lifetime = THRUST_PARTICLE_LIFETIME + rand.float32() * 0.08
-
-	p.color = rl.Color{255, 
-					   u8(150 + rand.float32() * 80), 
-					   u8(30 + rand.float32() * 50), 
-					   255}
-
-	spawn_particle(ps, p)
-}
-
-spawn_thrust_particles :: proc(ps: ^Particle_System, pe: ^Particle_Emitter) {
-	if !can_spawn_particle(ps^) do return
-
-	for i := 0; i < THRUST_EMITTER_BURST_COUNT && sa.len(ps.particles) < MAX_PARTICLES; i += 1 {
-		spawn_thrust_particle(ps, pe^)
-	}
-
-}
-
-update_emitters :: proc(gm: ^Game_Memory, dt: f32) {
-	for &pe, ship_type in gm.particle_system.thrust_emitters {
-	}
-
-	for &pe, ship_type in gm.particle_system.thrust_emitters {
-		if ship, ok := get_ship_by_ship_type(gm^, ship_type); ok {
-			update_thrust_emitter_for_ship(&pe, ship)
-
-			if pe.active {
-				if pe.spawn_timer.state != .Running {
-					start_timer(&pe.spawn_timer)
-					spawn_thrust_particle(&gm.particle_system, pe)
-				}
-
-				process_timer(&pe.spawn_timer, dt)
-
-				if is_timer_done(pe.spawn_timer) {
-					spawn_thrust_particle(&gm.particle_system, pe)
-				}
-			} else {
-				reset_timer(&pe.spawn_timer)
-			}
-		}
-	}
-}
-
-// at ship
-// create_explosion_emitter :: proc(ps: ^Particle_System, position: Position) {}
-
-// at ship entry and later exit positions
-// create_hyperspace_emitter :: proc(ps: ^Particle_System, position: Position) {}
-
-// Particle_Emitter :: struct {
-// 	position: Vec2,
-// 	rotation: f32,
-// 	active: bool,
-//
-// 	// Timing
-// 	spawn_timer: Maybe(Timer), // if no timer, then one-time spawn
-// 	spawn_rate: f32, // partcles/sec
-// 	duration: f32,
-// 	age: f32,
-// }
-// spawn at ship tail, depending on type/dims
-THRUST_EMITTER_SPAWN_INTERVAL :: 0.1
-THRUST_EMITTER_SPAWN_RATE :: 25
-make_thrust_emitter :: proc() -> Particle_Emitter {
-	pe: Particle_Emitter
-	pe.active = false
-	pe.spawn_rate = THRUST_EMITTER_SPAWN_RATE
-	pe.spawn_timer = create_timer(THRUST_EMITTER_SPAWN_INTERVAL)
-	return pe
-}
-
-update_thrust_emitter_for_ship :: proc(pe: ^Particle_Emitter, ship: Ship) {
-	if ship.is_thrusting  {
-		pe.active = true
-		pe.rotation = (ship.rotation + math.PI)
-		tail_pos := get_ship_tail_position(ship)
-		pe.position = tail_pos
-	} else {
-		pe.active = false
-	}
-}
-// move position to ship tail
 
 Scene :: enum {
 	Play,
@@ -403,6 +209,7 @@ update :: proc() {
 		update_play_scene(g, dt)
 		
 	case .End_Round:
+		update_particle_system(g, dt)
 		process_timer(&g.end_round_duration_timer, dt)
 		if is_timer_done(g.end_round_duration_timer) {
 			reset_timer(&g.end_round_duration_timer)
@@ -411,6 +218,7 @@ update :: proc() {
 			// reset_playfield_objects ??
 			reset_players(g)
 			clear_torpedos(g)
+			clear_particle_system(g)
 
 			g.scene = .Play
 		}
@@ -641,7 +449,7 @@ init :: proc() -> bool {
 
 	g.n_rounds = 1
 
-	ps: Particle_System
+	ps := new(Particle_System)
 	ps.thrust_emitters[.Wedge] = make_thrust_emitter()
 	ps.thrust_emitters[.Needle] = make_thrust_emitter()
 	g.particle_system = ps
@@ -968,17 +776,6 @@ draw_sprite :: proc(texture_id: Texture_ID, pos: Vec2, size: Vec2, rotation: f32
 	rl.DrawTexturePro(tex, src_rect, dst_rect, {}, rotation, tint)
 }
 
-aabb_intersects :: proc(a_x, a_y, a_w, a_h: f32, b_x, b_y, b_w, b_h: f32) -> bool {
-    return !(a_x + a_w < b_x ||
-           b_x + b_w < a_x ||
-           a_y + a_h < b_y ||
-           b_y + b_h < a_y)
-}
-
-circle_intersects:: proc(a_pos: Vec2, a_radius: f32, b_pos: Vec2, b_radius: f32) -> bool {
-	return linalg.length2(a_pos - b_pos) < (a_radius + b_radius) * (a_radius + b_radius)
-}
-
 debug_overlay_text_column :: proc(x,y: ^i32, slice_cstr: []string) {
 	gy: i32 = 20
 	for s in slice_cstr {
@@ -1083,19 +880,12 @@ update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, dt: f32) {
 	if .Fire in ship.input {
 		if is_timer_done(ship.torpedo_cooldown_timer) {
 			pos_nose := get_ship_nose_position(ship^)
-			torp_vel := ship.velocity + TORPEDO_SPEED * vector_from_rotation(ship.rotation)
+			torp_vel := ship.velocity + TORPEDO_SPEED * vec2_from_rotation(ship.rotation)
 			spawn_torpedo(gm, pos_nose, torp_vel)
 			ship.torpedo_count -= 1
 			restart_timer(&ship.torpedo_cooldown_timer)
 			ship.is_firing = true
 		}
-	}
-}
-
-vector_from_rotation :: proc(rot: f32) -> Vec2 {
-	return Vec2{
-		math.cos(rot),
-		math.sin(rot)
 	}
 }
 
@@ -1187,6 +977,11 @@ clear_torpedos :: proc(gm: ^Game_Memory) {
 	sa.clear(&gm.torpedos)
 }
 
+clear_particle_system :: proc(gm: ^Game_Memory) {
+	sa.clear(&gm.particle_system.transient_emitters)
+	sa.clear(&gm.particle_system.particles)
+}
+
 end_round :: proc(gm: ^Game_Memory, winner: Maybe(Player_ID)) {
 	gm.n_rounds += 1
 	gm.scene = .End_Round
@@ -1238,8 +1033,9 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 
 	for cc_b in sa.slice(&gm.players[.B].ship.collision_circles) {
 		if circle_intersects(cc_a.center + ship_a.position, cc_a.radius, cc_b.center + ship_b.position, cc_b.radius) {
-			destroy_ship(&gm.players[.A].ship)
-			destroy_ship(&gm.players[.B].ship)
+			destroy_ship(gm, &gm.players[.A].ship)
+			destroy_ship(gm, &gm.players[.B].ship)
+
 			end_round(gm, nil)
 			break
 		}
@@ -1249,14 +1045,14 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 	torp_collide_outer: for torp in sa.slice(&g.torpedos) {
 		for cc_b in sa.slice(&g.players[.B].ship.collision_circles) {
 			if circle_intersects(torp.position, torp.radius, cc_b.center + ship_b.position, cc_b.radius) {
-				destroy_ship(&gm.players[.B].ship)
+				destroy_ship(gm, &gm.players[.B].ship)
 				end_round(gm, .A)
 				gm.scores[.A] += 1
 				break torp_collide_outer
 			}
 		}
 		if circle_intersects(torp.position, torp.radius, cc_a.center + ship_a.position, cc_a.radius) {
-			destroy_ship(&gm.players[.A].ship)
+			destroy_ship(gm, &gm.players[.A].ship)
 			end_round(gm, .B)
 			gm.scores[.B] += 1
 			break torp_collide_outer
@@ -1279,9 +1075,9 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 	update_particle_system(gm, dt)
 }
 
-destroy_ship :: proc(ship: ^Ship) {
-	// TODO: ship explode animation
+destroy_ship :: proc(gm: ^Game_Memory, ship: ^Ship) {
 	ship.is_destroyed = true
+	spawn_explosion_emitter(gm.particle_system, ship.position)
 }
 
 update_torpedos :: proc(torpedos: ^Torpedos, dt: f32) {
@@ -1524,8 +1320,7 @@ draw_playfield :: proc(gm: Game_Memory) {
 		}
 	}
 
-	particles := gm.particle_system.particles
-	for particle in sa.slice(&particles) {
+	for particle in sa.slice(&gm.particle_system.particles) {
 		rl.DrawPixel(i32(particle.position.x), i32(particle.position.y), particle.color)
 	}
 	// rl.EndBlendMode()
@@ -1540,10 +1335,4 @@ draw_end_round :: proc(gm: Game_Memory) {
 	x := get_playfield_left() + get_playfield_width() / 2 - f32(text_length) / 2
 	y := get_playfield_top() + get_playfield_height() / 2 - 64
 	rl.DrawText(cstr, i32(x), i32(y), 32, rl.RED)
-}
-
-rotate_vec2 :: proc(v: Vec2, angle: f32) -> Vec2 {
-	rot_matrix := linalg.matrix2_rotate(angle)
-	result := rot_matrix * v
-	return result
 }

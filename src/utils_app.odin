@@ -38,9 +38,7 @@ end_letterbox_rendering :: proc() {
 	dst := Rect{-offset_x, -offset_y, viewport_width, viewport_height}
 
 	rl.BeginShaderMode(g.shaders[.FX_Bloom])
-	// rl.BeginShaderMode(g.shaders[.FX_Fade_Threshold])
 	rl.DrawTexturePro(g.render_texture.texture, src, dst, {}, 0, rl.WHITE)
-	// rl.EndShaderMode()
 	rl.EndShaderMode()
 	// rl.EndDrawing() // moved outside for debug overlay
 }
