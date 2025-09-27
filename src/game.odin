@@ -118,7 +118,9 @@ Scene :: enum {
 
 Player :: struct {
 	id: Player_ID,
+	input: Play_Input_Flags,
 	ship: Ship,
+	gamepad_id: i32,
 }
 
 Player_ID :: enum {A,B}
@@ -185,8 +187,6 @@ Ship :: struct {
 	is_destroyed: bool,
 	hyperspace_duration_timer: Timer,
 	hyperspace_cooldown_timer: Timer,
-
-	input: bit_set[Play_Input],
 }
 
 g: ^Game_Memory
@@ -201,6 +201,11 @@ update :: proc() {
 
 	if g.pause {
 		return
+	}
+
+	gpb := cast(rl.GamepadButton)rl.GetGamepadButtonPressed()
+	if gpb != .UNKNOWN {
+		pr(gpb)
 	}
 
 	// next_scene: Maybe(Scene) = nil
@@ -231,9 +236,11 @@ draw :: proc() {
 	switch g.scene {
 	case .Play:
 		draw_playfield(g^)
+		draw_topbar(g^)
 	case .End_Round:
 		draw_playfield(g^)
 		draw_end_round(g^)
+		draw_topbar(g^)
 	}
 
 	if g.debug {
@@ -258,7 +265,6 @@ draw :: proc() {
 		rl.DrawText("PAUSED", 90, 90, 30, rl.WHITE)
 	}
 
-	draw_topbar(g^)
 
 	end_letterbox_rendering()
 
@@ -317,6 +323,9 @@ setup :: proc() -> bool {
 		return false
 	}
 
+	mappings := rl.LoadFileText(fmt.ctprintf("assets/gamecontrollerdb.txt"))
+	rl.SetGamepadMappings(cstring(mappings))
+
 	rl.InitAudioDevice()
 	if !rl.IsAudioDeviceReady() {
 		log.warn("Failed to initialize raylib audio device.")
@@ -326,15 +335,6 @@ setup :: proc() -> bool {
 	resman: Resource_Manager
 	setup_resource_manager(&resman)
 	load_all_assets(&resman)
-
-	// TODO: generate noised starfield objects
-	// - sample to achieve desired density
-	// - save star objects
-	// - choose random starfield pan direction (heading)
-	// - update_starfield :: translate stars by heading
-	// - draw_starfield_star
-
-	// gen starfield using organic noise
 
 	starfield: Starfield
 	seed:i64= 6
@@ -417,7 +417,7 @@ init_starfield :: proc(
 	}
 	starfield.period = 0.2
 	starfield.timer = create_timer(starfield.period)
-	starfield.velocity = {0.5,0.5}
+	starfield.velocity = {5.5,5.5}
 	start_timer(&starfield.timer)
 }
 
@@ -428,6 +428,7 @@ init :: proc() -> bool {
 		return false
 	}
 	g.scene = .Play
+
 
 	player_a: Player
 	init_player(&player_a, .Wedge, {-50, -50})
@@ -512,6 +513,7 @@ game_should_run :: proc() -> bool {
 game_shutdown :: proc() {
 	unload_all_assets(&g.resman)
 	rl.UnloadRenderTexture(g.render_texture)
+	// rl.UnloadFileText(mappings)
 	free(g)
 }
 
@@ -645,97 +647,199 @@ Play_Input :: enum {
 	Hyperspace,
 }
 
-process_play_input :: proc(gm: ^Game_Memory) {
-	input: bit_set[Play_Input]
+Play_Input_Flags :: bit_set[Play_Input]
 
-	if rl.IsKeyDown(.S) {
+GAMEPAD1 :: 0
+GAMEPAD2 :: 1
+
+get_gamepad_input :: proc(gamepad_id: i32) -> Play_Input_Flags {
+	if gamepad_id == -1 do return {}
+	input: Play_Input_Flags
+	if rl.IsGamepadButtonDown(gamepad_id, rl.GamepadButton.RIGHT_FACE_DOWN) {
+		pr("gamepad thrust")
 		input += {.Thrust}
 	}
-	if rl.IsKeyDown(.W) {
+	if rl.IsGamepadButtonDown(gamepad_id, rl.GamepadButton.RIGHT_FACE_LEFT) {
+		pr("gamepad fire")
 		input += {.Fire}
 	}
-	if rl.IsKeyDown(.A) {
-		input += {.Rotate_Left}
-	}
-	if rl.IsKeyDown(.D) {
-		input += {.Rotate_Right}
-	}
-	if rl.IsKeyPressed(.SPACE) {
+	if rl.IsGamepadButtonDown(gamepad_id, rl.GamepadButton.RIGHT_FACE_RIGHT) {
 		input += {.Hyperspace}
 	}
+	if rl.IsGamepadButtonDown(gamepad_id, rl.GamepadButton.LEFT_FACE_LEFT) {
+		pr("gamepad rotleft")
+		input += {.Rotate_Left}
+	}
+	if rl.IsGamepadButtonDown(gamepad_id, rl.GamepadButton.LEFT_FACE_RIGHT) {
+		pr("gamepad rotright")
+		input += {.Rotate_Right}
+	}
+	// left stick for rotation, as digital
+	left_x := rl.GetGamepadAxisMovement(gamepad_id, rl.GamepadAxis.LEFT_X)
+	if left_x < -0.5 do input += {.Rotate_Left}
+	if left_x > 0.5 do input += {.Rotate_Right}
 
-	ship := &g.players[.A].ship
-
-	ship.input = input
-
-	// Set necessary state here, including for render
-	ship.is_thrusting = false
-	ship.is_hyperspacing = false
-	ship.is_firing = false
+	return input
 }
 
-apply_ship_physics :: proc(ship: ^Ship, dt: f32) {
-	if .Rotate_Left in ship.input {
-		ship.rotation -= SHIP_DEFAULT_ROTATION_RATE * dt
-	} else if .Rotate_Right in ship.input {
-		ship.rotation += SHIP_DEFAULT_ROTATION_RATE * dt
+is_real_gamepad :: proc(name: string) -> bool {
+	keyboard_patterns := [?]string{
+		"keyboard", "keychron", "ducky", "anne pro", "hhkb", "ergodox", "kinesis"
 	}
 
-	if .Thrust in ship.input {
-		heading := Vec2{
-			math.cos(ship.rotation),
-			math.sin(ship.rotation),
+	lower_name := strings.to_lower(name)
+	for pattern in keyboard_patterns {
+		if strings.contains(lower_name, pattern) {
+			return false
+		}
+	}
+
+	return true
+}
+
+get_gamepad_inputs :: proc() -> (gamepad_input_a: Play_Input_Flags, gamepad_input_b: Play_Input_Flags) {
+	@(static) detected := false
+	@(static) gamepad1: i32 = -1
+	@(static) gamepad2: i32 = -1
+
+	// detect & assign
+	if !detected {
+		for i in 0..<4 {
+			if rl.IsGamepadAvailable(i32(i)) {
+				name := string(rl.GetGamepadName(i32(i)))
+				if is_real_gamepad(name) {
+					pr("Found gamepad", i, name)
+					if gamepad1 == -1 {
+						pr("assigned",name,"to gamepad1")
+						gamepad1 = i32(i)
+						detected = true
+					} else {
+						pr("assigned",name,"to gamepad2")
+						gamepad2 = i32(i)
+					}
+					if gamepad1 != -1 && gamepad2 != -1 {
+						break
+
+					}
+				}
+			}
+		}
+	}
+
+	// pr("gamepad1 id ==", gamepad1)
+	// pr("last gamepad button pressed", rl.GetGamepadButtonPressed())
+	gamepad_input_a = get_gamepad_input(gamepad1)
+	gamepad_input_b = get_gamepad_input(gamepad2)
+
+	return gamepad_input_a, gamepad_input_b
+}
+
+get_play_input :: proc(gm: ^Game_Memory) -> (input_a: Play_Input_Flags, input_b: Play_Input_Flags) {
+	gamepad_input_a, gamepad_input_b := get_gamepad_inputs()
+
+	input_a = gamepad_input_a
+	input_b = gamepad_input_b
+
+	if rl.IsKeyDown(.S) {
+		input_a += {.Thrust}
+	}
+	if rl.IsKeyDown(.SPACE) {
+		input_a += {.Fire}
+	}
+	if rl.IsKeyDown(.A) {
+		input_a += {.Rotate_Left}
+	}
+	if rl.IsKeyDown(.D) {
+		input_a += {.Rotate_Right}
+	}
+	if rl.IsKeyPressed(.LEFT_SHIFT) {
+		input_a += {.Hyperspace}
+	}
+
+	if rl.IsKeyDown(.DOWN) {
+		input_b += {.Thrust}
+	}
+	if rl.IsKeyDown(.RIGHT_CONTROL) {
+		input_b += {.Fire}
+	}
+	if rl.IsKeyDown(.LEFT) {
+		input_b += {.Rotate_Left}
+	}
+	if rl.IsKeyDown(.RIGHT) {
+		input_b += {.Rotate_Right}
+	}
+	if rl.IsKeyPressed(.ENTER) {
+		input_b += {.Hyperspace}
+	}
+
+	return input_a, input_b
+}
+
+apply_ship_physics :: proc(ship: ^Ship, input: Play_Input_Flags, dt: f32) {
+	// Set necessary state here, including for render
+	ship.is_thrusting = false
+	ship.is_firing = false
+
+	if !ship.is_hyperspacing {
+		if .Rotate_Left in input {
+			ship.rotation -= SHIP_DEFAULT_ROTATION_RATE * dt
+		} else if .Rotate_Right in input {
+			ship.rotation += SHIP_DEFAULT_ROTATION_RATE * dt
 		}
 
-		// make a thrust force vector: rotation vector * thrust_force
-		thrust_force := heading * SHIP_DEFAULT_THRUST_FORCE
+		if .Thrust in input {
+			heading := Vec2{
+				math.cos(ship.rotation),
+				math.sin(ship.rotation),
+			}
 
-		// get an accel from: a = thrust_force_vector/ship_mass
-		acc := thrust_force / ship.mass
+			// make a thrust force vector: rotation vector * thrust_force
+			thrust_force := heading * SHIP_DEFAULT_THRUST_FORCE
 
-		// apply to vel: vel += accel * dt
-		d_vel := acc * dt
+			// get an accel from: a = thrust_force_vector/ship_mass
+			acc := thrust_force / ship.mass
 
-		ship.velocity += d_vel
-		ship.is_thrusting = true
+			// apply to vel: vel += accel * dt
+			d_vel := acc * dt
+
+			ship.velocity += d_vel
+			ship.is_thrusting = true
+		}
 	}
 
 	process_timer(&ship.hyperspace_cooldown_timer, dt)
 
-
-	if .Hyperspace in ship.input {
-		if is_timer_done(ship.hyperspace_cooldown_timer) {
-			// hyperspace start anim
-			// start timer
-			// hyperspace end anim
-			// move ship to rand pos
-			if !is_timer_running(ship.hyperspace_duration_timer) {
-				start_timer(&ship.hyperspace_duration_timer)
-				ship.is_hyperspacing = true
-			}
-
-			process_timer(&ship.hyperspace_duration_timer, dt)
-
-			if is_timer_done(ship.hyperspace_duration_timer) {
-				rng_1 := rand.float32()
-				rng_2 := rand.float32()
-				w := get_playfield_width()
-				h := get_playfield_height()
-
-				possible_length_ratio: f32 = 0.85
-				rand_x := get_playfield_left() + w * (1.0 - possible_length_ratio) + rng_1 * w * possible_length_ratio
-				rand_y := get_playfield_top() + h * (1.0 - possible_length_ratio) + rng_2 * get_playfield_height() * possible_length_ratio
-
-				ship.position.x = rand_x
-				ship.position.y = rand_y
-				ship.velocity = {}
-
-				restart_timer(&ship.hyperspace_cooldown_timer)
-				ship.is_hyperspacing = false
-			}
-		}
+	// try set off hyperspacing
+	if .Hyperspace in input && !ship.is_hyperspacing && is_timer_done(ship.hyperspace_cooldown_timer) { 
+		// hyperspace start anim
+		// start timer
+		// hyperspace end anim
+		// move ship to rand pos
+		restart_timer(&ship.hyperspace_duration_timer)
+		ship.is_hyperspacing = true
+		ship.hyperspace_count += 1
 	}
 
+	if ship.is_hyperspacing {
+		process_timer(&ship.hyperspace_duration_timer, dt)
+		if is_timer_done(ship.hyperspace_duration_timer) {
+			rng_1 := rand.float32()
+			rng_2 := rand.float32()
+			w := get_playfield_width()
+			h := get_playfield_height()
+
+			possible_length_ratio: f32 = 0.85
+			rand_x := get_playfield_left() + w * (1.0 - possible_length_ratio) + rng_1 * w * possible_length_ratio
+			rand_y := get_playfield_top() + h * (1.0 - possible_length_ratio) + rng_2 * get_playfield_height() * possible_length_ratio
+
+			ship.position.x = rand_x
+			ship.position.y = rand_y
+			ship.velocity = {}
+
+			restart_timer(&ship.hyperspace_cooldown_timer)
+			ship.is_hyperspacing = false
+		}
+	}
 }
 
 GRAVITY_COEFFICIENT :: .0000000000667430
@@ -750,7 +854,7 @@ force_of_gravity :: proc(pos_ship: Vec2, pos_star: Vec2, mass_ship: f32, mass_st
 	return force_vector
 }
 
-apply_star_physics :: proc(ship: ^Ship, star: Star, dt: f32) {
+apply_ship_to_star_physics :: proc(ship: ^Ship, star: Star, dt: f32) {
 	force_gravity := force_of_gravity(ship.position, star.position, ship.mass, star.mass)
 	accel_gravity_ship := force_gravity / ship.mass
 	d_vel := accel_gravity_ship * dt
@@ -761,8 +865,8 @@ Ship_Type :: enum{Wedge, Needle}
 
 init_player :: proc(p: ^Player, ship_type: Ship_Type, position: Position = {}) {
 	p.ship = make_ship(ship_type, position)
-	start_timer(&p.ship.torpedo_cooldown_timer)
-	start_timer(&p.ship.hyperspace_cooldown_timer)
+	clear_timer(&p.ship.torpedo_cooldown_timer)
+	clear_timer(&p.ship.hyperspace_cooldown_timer)
 }
 
 draw_sprite :: proc(texture_id: Texture_ID, pos: Vec2, size: Vec2, rotation: f32 = 0, scale: f32 = 1, tint: rl.Color = rl.WHITE) {
@@ -792,11 +896,13 @@ make_string_from_value :: proc(v: any) -> string {
 draw_debug_overlay :: proc() {
 	{
 		{
-			ship := g.players[.A].ship
+			player_id: Player_ID = .A
+			input := g.players[player_id].input
+			ship := g.players[player_id].ship
 			x: i32 = 5
 			y: i32 = 40
 
-			rotating := .Rotate_Left in ship.input ? "Left" : .Rotate_Right in ship.input ? "Right" : "nil"
+			rotating := .Rotate_Left in input ? "Left" : .Rotate_Right in input ? "Right" : "nil"
 
 			arr := [?]string{
 				fmt.tprintf("A"),
@@ -816,11 +922,13 @@ draw_debug_overlay :: proc() {
 			debug_overlay_text_column(&x, &y, arr[:])
 		}
 		{
-			ship := g.players[.B].ship
+			player_id: Player_ID = .B
+			input := g.players[player_id].input
+			ship := g.players[player_id].ship
 			x: i32 = 5
 			y: i32 = 400
 
-			rotating := .Rotate_Left in ship.input ? "Left" : .Rotate_Right in ship.input ? "Right" : "nil"
+			rotating := .Rotate_Left in input ? "Left" : .Rotate_Right in input ? "Right" : "nil"
 
 			arr := [?]string{
 				fmt.tprintf("B"),
@@ -869,7 +977,11 @@ wraparound :: proc(position: ^Position) {
 	}
 }
 
-update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, dt: f32) {
+update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flags, dt: f32) {
+	apply_ship_physics(ship, input, dt)
+
+	// apply_ship_to_star_physics(&player.ship, g.central_star, dt)
+
 	ship.position.x += ship.velocity.x * dt
 	ship.position.y += ship.velocity.y * dt
 
@@ -877,7 +989,7 @@ update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, dt: f32) {
 	wraparound(&ship.position)
 
 	process_timer(&ship.torpedo_cooldown_timer, dt) 
-	if .Fire in ship.input {
+	if .Fire in input {
 		if is_timer_done(ship.torpedo_cooldown_timer) {
 			pos_nose := get_ship_nose_position(ship^)
 			torp_vel := ship.velocity + TORPEDO_SPEED * vec2_from_rotation(ship.rotation)
@@ -1007,57 +1119,71 @@ update_starfield :: proc(gm: ^Game_Memory, dt: f32) {
 	}
 }
 
+update_play_input :: proc(gm: ^Game_Memory) {
+	input_a, input_b := get_play_input(gm)
+
+	player_a := &gm.players[.A]
+	player_a.input = input_a
+
+	player_b := &gm.players[.B]
+	player_b.input = input_b
+}
+
 update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
-	process_play_input(gm)
+	update_play_input(gm)
 
 	update_starfield(gm, dt)
 
 	// Step physics and controls
 	for &player in gm.players {
 		if !player.ship.is_destroyed {
-			apply_ship_physics(&player.ship, dt)
-			// apply_star_physics(&player.ship, g.central_star, dt)
-			update_ship(gm, &player.ship, dt)
+			update_ship(gm, &player.ship, player.input, dt)
 		}
 	}
 
 	update_torpedos(&gm.torpedos, dt)
 
-
 	// Collide
 	// ship to ship
 
-	cc_a := sa.get(gm.players[.A].ship.collision_circles, 0)
 	ship_a := gm.players[.A].ship
 	ship_b := gm.players[.B].ship
+	cc_a := sa.get(gm.players[.A].ship.collision_circles, 0)
+	if !ship_a.is_hyperspacing && !ship_b.is_hyperspacing {
+		for cc_b in sa.slice(&gm.players[.B].ship.collision_circles) {
+			if circle_intersects(cc_a.center + ship_a.position, cc_a.radius, cc_b.center + ship_b.position, cc_b.radius) {
+				destroy_ship(gm, &gm.players[.A].ship)
+				destroy_ship(gm, &gm.players[.B].ship)
 
-	for cc_b in sa.slice(&gm.players[.B].ship.collision_circles) {
-		if circle_intersects(cc_a.center + ship_a.position, cc_a.radius, cc_b.center + ship_b.position, cc_b.radius) {
-			destroy_ship(gm, &gm.players[.A].ship)
-			destroy_ship(gm, &gm.players[.B].ship)
-
-			end_round(gm, nil)
-			break
+				end_round(gm, nil)
+				break
+			}
 		}
 	}
 
 	// torpedo to ship
 	torp_collide_outer: for torp in sa.slice(&g.torpedos) {
-		for cc_b in sa.slice(&g.players[.B].ship.collision_circles) {
-			if circle_intersects(torp.position, torp.radius, cc_b.center + ship_b.position, cc_b.radius) {
-				destroy_ship(gm, &gm.players[.B].ship)
-				end_round(gm, .A)
-				gm.scores[.A] += 1
+		if !ship_b.is_hyperspacing {
+			for cc_b in sa.slice(&g.players[.B].ship.collision_circles) {
+				if circle_intersects(torp.position, torp.radius, cc_b.center + ship_b.position, cc_b.radius) {
+					destroy_ship(gm, &gm.players[.B].ship)
+					end_round(gm, .A)
+					gm.scores[.A] += 1
+					break torp_collide_outer
+				}
+			}
+		}
+		if !ship_a.is_hyperspacing {
+			if circle_intersects(torp.position, torp.radius, cc_a.center + ship_a.position, cc_a.radius) {
+				destroy_ship(gm, &gm.players[.A].ship)
+				end_round(gm, .B)
+				gm.scores[.B] += 1
 				break torp_collide_outer
 			}
 		}
-		if circle_intersects(torp.position, torp.radius, cc_a.center + ship_a.position, cc_a.radius) {
-			destroy_ship(gm, &gm.players[.A].ship)
-			end_round(gm, .B)
-			gm.scores[.B] += 1
-			break torp_collide_outer
-		}
 	}
+
+	// TODO: collision with central star
 
 	// Destroy and cleanup
 	torp_indices_to_destroy: sa.Small_Array(MAX_LIVE_TORPEDOS, int)
@@ -1077,7 +1203,7 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 
 destroy_ship :: proc(gm: ^Game_Memory, ship: ^Ship) {
 	ship.is_destroyed = true
-	spawn_explosion_emitter(gm.particle_system, ship.position)
+	spawn_ship_destruction_emitter(gm.particle_system, ship.position)
 }
 
 update_torpedos :: proc(torpedos: ^Torpedos, dt: f32) {
@@ -1237,43 +1363,32 @@ draw_topbar :: proc(gm: Game_Memory) {
 					topbar_height,
 					TOPBAR_COLOR)
 
-	fs: i32 = 20
-	gap_x: i32 = 25
-	gap_y: i32 = 20
-	{
-		// player a
-		ship := gm.players[.A].ship
-		x: i32 = i32(get_screen_left()) + 10
-		y: i32 = i32(get_screen_top()) + 5
+	fs: i32 : 20
+	gap_x: i32 : 25
+	gap_y: i32 : 20
+	draw_player_display :: proc(ship: Ship, x0, y0: i32, fs: i32, gap_x: i32) {
+		gap_y: i32 : 20
+
+		x := x0
+		y := y0
 
 		torp_display := fmt.ctprintf("torpedos: %v", ship.torpedo_count)
 		rl.DrawText(torp_display, x, y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
 
-		hyperspace_display := fmt.ctprintf("hyperspace jumps: %v", ship.hyperspace_count)
-		rl.DrawText(hyperspace_display, x, y + gap_y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
+		hyperspace_count_display := fmt.ctprintf("hspace jumps: %v", ship.hyperspace_count)
+		rl.DrawText(hyperspace_count_display, x, y + gap_y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
 
 		x += rl.MeasureText(torp_display, fs) + gap_x
 		fuel_display := fmt.ctprintf("fuel: %v%%", ship.fuel_count)
 		rl.DrawText(fuel_display, x, y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
+
+		cd := get_timer_progress(ship.hyperspace_cooldown_timer) * 100
+		hyperspace_cooldown_display := fmt.ctprintf("hspace cd: %.f%%", cd)
+		rl.DrawText(hyperspace_cooldown_display, x + 25, y + gap_y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
 	}
 
-	{
-		// player b
-		ship := gm.players[.B].ship
-		x: i32 = i32(get_screen_right()) - 300
-		y: i32 = i32(get_screen_top()) + 5
-
-		torp_display := fmt.ctprintf("torpedos: %v", ship.torpedo_count)
-		rl.DrawText(torp_display, x, y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
-
-		hyperspace_display := fmt.ctprintf("hyperspace jumps: %v", ship.hyperspace_count)
-		rl.DrawText(hyperspace_display, x, y + gap_y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
-
-		x += rl.MeasureText(torp_display, fs) + gap_x
-		fuel_display := fmt.ctprintf("fuel: %v%%", ship.fuel_count)
-		rl.DrawText(fuel_display, x, y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
-	}
-
+	draw_player_display(gm.players[.A].ship, i32(get_screen_left()) + 10, i32(get_screen_top()) + 5, fs, gap_x)
+	draw_player_display(gm.players[.B].ship, i32(get_screen_right()) - 400, i32(get_screen_top()) + 5, fs, gap_x)
 
 	{
 		x: i32 = i32(get_screen_left()) + i32((get_screen_right() - get_screen_left()) / 2) - 150
@@ -1313,6 +1428,7 @@ draw_playfield :: proc(gm: Game_Memory) {
 
 	// rl.BeginBlendMode(.ADDITIVE)
 	for player in gm.players {
+		if player.ship.is_hyperspacing do continue
 		if player.ship.ship_type == .Wedge {
 			draw_ship_wedge(player.ship)
 		} else if player.ship.ship_type == .Needle {

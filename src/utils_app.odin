@@ -7,7 +7,7 @@ LETTERBOX_COLOR :: rl.DARKGRAY
 begin_letterbox_rendering :: proc() {
 	rl.BeginTextureMode(g.render_texture)
 	// rl.ClearBackground(BACKGROUND_COLOR)
-	rl.DrawRectangle(0,0,LOGICAL_SCREEN_WIDTH,LOGICAL_SCREEN_HEIGHT, rl.Fade(rl.BLACK, 0.08))
+	rl.DrawRectangle(0,0,LOGICAL_SCREEN_WIDTH,LOGICAL_SCREEN_HEIGHT, rl.Fade(rl.BLACK, 0.10))
 	
 	// Scale all drawing by RENDER_TEXTURE_SCALE for higher resolution
 	camera := rl.Camera2D{
