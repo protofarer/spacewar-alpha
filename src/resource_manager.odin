@@ -27,13 +27,13 @@ Resource_Manager :: struct {
 setup_resource_manager :: proc(rm: ^Resource_Manager) {
     log.info("Setup resource manager...")
     rm.base_texture_path = "assets/"
-    rm.base_sound_path = "assets/"
+    rm.base_sound_path = "assets/sounds/"
     // rm.base_font_path = "assets/fonts/"
     // rm.transparency_color = rl.WHITE
 }
 
 load_all_assets :: proc(rm: ^Resource_Manager) -> bool {
-    log.info("Loading all game assets...")
+    log.info("Loading game assets...")
 
     texture_success := load_all_textures(rm)
     sound_success := load_all_sounds(rm)

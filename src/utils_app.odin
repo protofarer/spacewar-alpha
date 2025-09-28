@@ -4,6 +4,8 @@ import rl "vendor:raylib"
 
 LETTERBOX_COLOR :: rl.DARKGRAY
 
+// TODO: rename or re-org code, poor file name
+
 begin_letterbox_rendering :: proc() {
 	rl.BeginTextureMode(g.render_texture)
 	// rl.ClearBackground(BACKGROUND_COLOR)

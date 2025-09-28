@@ -80,6 +80,18 @@ play_sfx :: proc(id: Sound_ID) {
     rl.PlaySound(sound)
 }
 
+// Play a continuous sound effect with volume control
+play_continuous_sfx :: proc(id: Sound_ID) {
+	am := g.audman
+    if am.muted do return
+
+    sound := get_sound(id)
+	if !rl.IsSoundPlaying(sound) {
+		rl.SetSoundVolume(sound, am.sfx_volume * am.master_volume)
+		rl.PlaySound(sound)
+	}
+}
+
 // Start playing music (stops current music if playing)
 play_music :: proc(id: Sound_ID, loop: bool = true) {
 	am := g.audman

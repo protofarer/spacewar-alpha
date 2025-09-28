@@ -231,7 +231,22 @@ update :: proc() {
 }
 
 draw :: proc() {
-	begin_letterbox_rendering()
+	//////////////////////////////////////////////////
+	// below from begin_letterbox_rendering, proc is cumbersome and misleading
+	rl.BeginTextureMode(g.render_texture)
+	// rl.ClearBackground(BACKGROUND_COLOR)
+	rl.DrawRectangle(0,0,LOGICAL_SCREEN_WIDTH,LOGICAL_SCREEN_HEIGHT, rl.Fade(rl.BLACK, 0.10))
+	
+	// Scale all drawing by RENDER_TEXTURE_SCALE for higher resolution
+	camera := rl.Camera2D{
+		zoom = RENDER_TEXTURE_SCALE,
+		offset = { 
+			get_playfield_right() * RENDER_TEXTURE_SCALE,
+			f32(PLAYFIELD_LENGTH) / 2 + f32(TOPBAR_HEIGHT) / 2 * RENDER_TEXTURE_SCALE,
+		},
+	}
+	rl.BeginMode2D(camera)
+	//////////////////////////////
 
 	switch g.scene {
 	case .Play:
@@ -266,8 +281,30 @@ draw :: proc() {
 	}
 
 
-	end_letterbox_rendering()
+	/////////////////////////////////////////////////////////////////////////////////
+	// end_letterbox_rendering()
+	rl.EndMode2D()  // End the scale transform
+	rl.EndTextureMode()
+	
+	rl.BeginDrawing()
+	rl.ClearBackground(LETTERBOX_COLOR)
+	
+	// Calculate letterbox dimensions
+	viewport_width, viewport_height := get_viewport_size()
+	offset_x, offset_y := get_viewport_offset()
+	
+	// Draw the render texture with letterboxing
+	// TODO: get_final_render_rects (render_texture & viewport)
+	render_texture_width: f32 = LOGICAL_SCREEN_WIDTH * RENDER_TEXTURE_SCALE
+	render_texture_height: f32 = LOGICAL_SCREEN_HEIGHT * RENDER_TEXTURE_SCALE
+	src := Rect{0, 0, render_texture_width, -render_texture_height} // negative height flips texture
+	dst := Rect{-offset_x, -offset_y, viewport_width, viewport_height}
 
+	rl.BeginShaderMode(g.shaders[.FX_Bloom])
+	rl.DrawTexturePro(g.render_texture.texture, src, dst, {}, 0, rl.WHITE)
+	rl.EndShaderMode()
+	// rl.EndDrawing() // moved outside for debug overlay
+	//////////////////////////////////////////////////////////////////////////////
 
 	if g.debug {
 		draw_debug_overlay() // outside of render texture scaling
@@ -775,7 +812,7 @@ get_play_input :: proc(gm: ^Game_Memory) -> (input_a: Play_Input_Flags, input_b:
 	return input_a, input_b
 }
 
-apply_ship_physics :: proc(ship: ^Ship, input: Play_Input_Flags, dt: f32) {
+apply_ship_physics :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flags, dt: f32) {
 	// Set necessary state here, including for render
 	ship.is_thrusting = false
 	ship.is_firing = false
@@ -804,6 +841,22 @@ apply_ship_physics :: proc(ship: ^Ship, input: Play_Input_Flags, dt: f32) {
 
 			ship.velocity += d_vel
 			ship.is_thrusting = true
+
+			if ship.ship_type == .Wedge {
+				play_continuous_sfx(.Thruster_Wedge)
+			} else {
+				play_continuous_sfx(.Thruster_Needle)
+			}
+		} else {
+			if ship.ship_type == .Wedge {
+				if is_sfx_playing(.Thruster_Wedge) {
+					stop_sfx(.Thruster_Wedge)
+				}
+			} else {
+				if is_sfx_playing(.Thruster_Needle) {
+					stop_sfx(.Thruster_Needle)
+				}
+			}
 		}
 	}
 
@@ -818,6 +871,8 @@ apply_ship_physics :: proc(ship: ^Ship, input: Play_Input_Flags, dt: f32) {
 		restart_timer(&ship.hyperspace_duration_timer)
 		ship.is_hyperspacing = true
 		ship.hyperspace_count += 1
+		play_sfx(.Hyperspace_Entry)
+		spawn_hyperspace_emitter(gm.particle_system, ship.position)
 	}
 
 	if ship.is_hyperspacing {
@@ -838,6 +893,8 @@ apply_ship_physics :: proc(ship: ^Ship, input: Play_Input_Flags, dt: f32) {
 
 			restart_timer(&ship.hyperspace_cooldown_timer)
 			ship.is_hyperspacing = false
+			play_sfx(.Hyperspace_Exit)
+			spawn_hyperspace_emitter(gm.particle_system, ship.position)
 		}
 	}
 }
@@ -978,7 +1035,7 @@ wraparound :: proc(position: ^Position) {
 }
 
 update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flags, dt: f32) {
-	apply_ship_physics(ship, input, dt)
+	apply_ship_physics(gm, ship, input, dt)
 
 	// apply_ship_to_star_physics(&player.ship, g.central_star, dt)
 
@@ -997,6 +1054,7 @@ update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flags, dt: 
 			ship.torpedo_count -= 1
 			restart_timer(&ship.torpedo_cooldown_timer)
 			ship.is_firing = true
+			play_sfx(.Fire_Torpedo)
 		}
 	}
 }
@@ -1204,6 +1262,7 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 destroy_ship :: proc(gm: ^Game_Memory, ship: ^Ship) {
 	ship.is_destroyed = true
 	spawn_ship_destruction_emitter(gm.particle_system, ship.position)
+	play_sfx(.Ship_Destruction)
 }
 
 update_torpedos :: proc(torpedos: ^Torpedos, dt: f32) {

@@ -226,7 +226,7 @@ can_spawn_particle :: proc(ps: Particle_System) -> bool {
 }
 
 THRUST_PARTICLE_DEFAULT_SPEED :: 150
-THRUST_PARTICLE_LIFETIME :: 1.25
+THRUST_PARTICLE_LIFETIME :: 1.1
 spawn_thrust_particle :: proc(ps: ^Particle_System, pe: Particle_Emitter) {
 	p: Particle
 	p.type = .Vector
@@ -236,13 +236,13 @@ spawn_thrust_particle :: proc(ps: ^Particle_System, pe: Particle_Emitter) {
 	p.velocity = exhaust_vel
 
 	// lateral spread is perpendicular to exhaust
-	lateral_spread := (rand.float32() - 0.5) * 8
+	lateral_spread := (rand.float32() - 0.5) * 20
 	offset := Vec2{0, lateral_spread}
 	rotated_offset := rotate_vec2(offset, pe.rotation)
 	p.position = pe.position + rotated_offset
 
 	p.lifetime = 0
-	p.max_lifetime = THRUST_PARTICLE_LIFETIME + rand.float32() * 0.08
+	p.max_lifetime = THRUST_PARTICLE_LIFETIME + rand.float32() * 0.1
 
 	p.data1 = rand.float32() * math.TAU // flicker phase
 	p.data2 = 1.0 + rand.float32() * 0.5 // fade curve variation
@@ -405,13 +405,13 @@ spawn_hyperspace_particle :: proc(ps: ^Particle_System, pe: Particle_Emitter) {
 	p.data2 = rand.float32() * 2.0 + 0.5 // warp intensity for size pulsing
 
 	color_variant := rand.float32()
-	if color_variant < 0.4 {
+	if color_variant < 0.1 {
 		// Bright cyan
 		p.color = rl.Color{u8(50 + rand.float32() * 100),   // Red: 50-150
 		                   u8(200 + rand.float32() * 55),   // Green: 200-255
 		                   u8(200 + rand.float32() * 55),   // Blue: 200-255
 		                   255}
-	} else if color_variant < 0.7 {
+	} else if color_variant < 0.5 {
 		// Electric white
 		p.color = rl.Color{u8(220 + rand.float32() * 35),   // Red: 220-255
 		                   u8(220 + rand.float32() * 35),   // Green: 220-255
@@ -428,8 +428,8 @@ spawn_hyperspace_particle :: proc(ps: ^Particle_System, pe: Particle_Emitter) {
 	spawn_particle(ps, p)
 }
 
-HYPERSPACE_EMITTER_SPAWN_RATE :: 20
-HYPERSPACE_EMITTER_MAX_LIFETIME :: 0.3
+HYPERSPACE_EMITTER_SPAWN_RATE :: 100
+HYPERSPACE_EMITTER_MAX_LIFETIME :: 1.5
 make_hyperspace_emitter :: proc(position: Position) -> Particle_Emitter {
 	continuous_data := Continuous_Emitter_Data{
 		spawn_rate = HYPERSPACE_EMITTER_SPAWN_RATE,
