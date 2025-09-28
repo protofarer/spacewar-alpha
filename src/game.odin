@@ -80,6 +80,7 @@ Game_Memory :: struct {
 	n_rounds: i32,
 	end_round_duration_timer: Timer,
 	end_round_display: string,
+	has_end_round_mid_action_played: bool,
 
 	starfield: Starfield,
 	shaders: Shaders,
@@ -216,14 +217,21 @@ update :: proc() {
 	case .End_Round:
 		update_particle_system(g, dt)
 		process_timer(&g.end_round_duration_timer, dt)
+		if get_timer_progress(g.end_round_duration_timer) >= 0.5 && !g.has_end_round_mid_action_played {
+			play_sfx(.End_Round)
+			g.has_end_round_mid_action_played = true
+		}
 		if is_timer_done(g.end_round_duration_timer) {
+			// CSDR reset round state ??
 			reset_timer(&g.end_round_duration_timer)
 			g.end_round_display = ""
+			g.has_end_round_mid_action_played = false
 
-			// reset_playfield_objects ??
+			// CSDR reset_playfield_objects ??
 			reset_players(g)
 			clear_torpedos(g)
 			clear_particle_system(g)
+
 
 			g.scene = .Play
 		}
@@ -254,7 +262,9 @@ draw :: proc() {
 		draw_topbar(g^)
 	case .End_Round:
 		draw_playfield(g^)
-		draw_end_round(g^)
+		if g.has_end_round_mid_action_played {
+			draw_end_round(g^)
+		}
 		draw_topbar(g^)
 	}
 

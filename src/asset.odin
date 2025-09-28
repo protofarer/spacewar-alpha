@@ -10,4 +10,5 @@ Sound_ID :: enum {
 	Hyperspace_Entry,
 	Hyperspace_Exit,
 	Fire_Torpedo,
+	End_Round,
 }
