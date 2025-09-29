@@ -2,17 +2,16 @@ package game
 
 import "core:fmt"
 import "core:log"
-import "core:math/linalg"
 import "core:strings"
-import "core:math"
 import "core:time"
+import "core:math"
+import "core:math/linalg"
 import "core:math/noise"
 import "core:math/rand"
 import sa "core:container/small_array"
 import rl "vendor:raylib"
 
 pr :: fmt.println
-prf :: fmt.printfln
 
 Void :: struct{}
 Vec2 :: [2]f32
@@ -30,14 +29,13 @@ TOPBAR_PERCENT_LENGTH :: 0.05
 LOGICAL_SCREEN_WIDTH :: 1080
 LOGICAL_SCREEN_HEIGHT :: LOGICAL_SCREEN_WIDTH * (1 + TOPBAR_PERCENT_LENGTH)
 
-
 TOPBAR_HEIGHT :: LOGICAL_SCREEN_HEIGHT - LOGICAL_SCREEN_WIDTH
 TOPBAR_COLOR :: rl.DARKBROWN
 TOPBAR_DEFAULT_TEXT_COLOR :: rl.WHITE
 
 PLAYFIELD_LENGTH :: LOGICAL_SCREEN_WIDTH
 
-CENTRAL_STAR_ROTATION_RATE :: 500
+CENTRAL_STAR_ROTATION_RATE :: 100
 CENTRAL_STAR_RADIUS :: 20
 CENTRAL_STAR_MASS :: 1000000000000000000000
 
@@ -74,15 +72,17 @@ Game_Memory :: struct {
 	scene: Scene,
 	players: [Player_ID]Player,
 	scores: [Player_ID]i32,
-	central_star: Star,
 	torpedos: Torpedos,
+
+	central_star: Star,
+	central_star_rays: Central_Star_Rays,
+	starfield: Starfield,
 
 	n_rounds: i32,
 	end_round_duration_timer: Timer,
 	end_round_display: string,
 	has_end_round_mid_action_played: bool,
 
-	starfield: Starfield,
 	shaders: Shaders,
 
 	bloom_shader_data: Bloom_Shader,
@@ -101,6 +101,13 @@ Shader_Kind :: enum {
 	FX_Bloom,
 }
 
+Ship_Type :: enum{Wedge, Needle}
+
+CENTRAL_STAR_RAY_COUNT :: 64
+Star_Ray :: struct {
+	angle, length, phase_offset: f32
+}
+Central_Star_Rays :: sa.Small_Array(CENTRAL_STAR_RAY_COUNT, Star_Ray)
 
 get_ship_by_ship_type :: proc(gm: Game_Memory, ship_type: Ship_Type) -> (ship: Ship, ok: bool) {
 	for player in gm.players {
@@ -204,11 +211,6 @@ update :: proc() {
 		return
 	}
 
-	gpb := cast(rl.GamepadButton)rl.GetGamepadButtonPressed()
-	if gpb != .UNKNOWN {
-		pr(gpb)
-	}
-
 	// next_scene: Maybe(Scene) = nil
 	switch g.scene {
 	case .Play:
@@ -231,7 +233,6 @@ update :: proc() {
 			reset_players(g)
 			clear_torpedos(g)
 			clear_particle_system(g)
-
 
 			g.scene = .Play
 		}
@@ -322,45 +323,6 @@ draw :: proc() {
 
 	rl.EndDrawing()
 }
-
-Bloom_Shader :: struct {
-	shader: rl.Shader,
-	resolution_loc: i32,
-	threshold_loc: i32,
-	intensity_loc: i32,
-	spread_loc: i32,
-	resolution: Vec2,
-	threshold: f32,
-	intensity: f32,
-	spread: f32,
-}
-
-setup_bloom_shader :: proc() -> Bloom_Shader {
-	shader := rl.LoadShader(nil, "assets/shaders/bloom.fs")
-
-	bloom_shader_data: Bloom_Shader
-	bloom_shader_data.shader = shader
-
-    // Get uniform locations
-    bloom_shader_data.resolution_loc = rl.GetShaderLocation(bloom_shader_data.shader, "resolution")
-    bloom_shader_data.threshold_loc = rl.GetShaderLocation(bloom_shader_data.shader, "bloomThreshold")
-    bloom_shader_data.intensity_loc = rl.GetShaderLocation(bloom_shader_data.shader, "bloomIntensity")
-    bloom_shader_data.spread_loc = rl.GetShaderLocation(bloom_shader_data.shader, "bloomSpread")
-
-	bloom_shader_data.resolution = {LOGICAL_SCREEN_WIDTH, LOGICAL_SCREEN_HEIGHT}
-    rl.SetShaderValue(bloom_shader_data.shader, bloom_shader_data.resolution_loc, &bloom_shader_data.resolution, rl.ShaderUniformDataType.VEC2)
-
-    bloom_shader_data.intensity = 1.25
-    rl.SetShaderValue(bloom_shader_data.shader, bloom_shader_data.intensity_loc, &bloom_shader_data.intensity, rl.ShaderUniformDataType.FLOAT)
-
-	bloom_shader_data.threshold = 0.9
-    rl.SetShaderValue(bloom_shader_data.shader, bloom_shader_data.threshold_loc, &bloom_shader_data.threshold, rl.ShaderUniformDataType.FLOAT)
-
-    bloom_shader_data.spread = 1.1
-    rl.SetShaderValue(bloom_shader_data.shader, bloom_shader_data.spread_loc, &bloom_shader_data.spread, rl.ShaderUniformDataType.FLOAT)
-
-	return bloom_shader_data
-}
  
 // Run once: allocate, set global variable immutable values
 setup :: proc() -> bool {
@@ -370,12 +332,13 @@ setup :: proc() -> bool {
 		return false
 	}
 
+	// Use latest SDL 2 mappings rather than outdated glfw
 	mappings := rl.LoadFileText(fmt.ctprintf("assets/gamecontrollerdb.txt"))
 	rl.SetGamepadMappings(cstring(mappings))
 
 	rl.InitAudioDevice()
 	if !rl.IsAudioDeviceReady() {
-		log.warn("Failed to initialize raylib audio device.")
+		log.warn("Failed to initialize raylib audio device")
 	}
 	audman := init_audio_manager()
 
@@ -388,42 +351,44 @@ setup :: proc() -> bool {
 	sample_resolution: f32 = 64
 	noise_scale: f32 = 0.02
 	star_threshold: f32 = 0.0
-	init_starfield(&starfield, 
-				   seed, 
-				   get_playfield_left(), 
-				   get_playfield_top(), 
-				   PLAYFIELD_LENGTH, 
-				   PLAYFIELD_LENGTH, 
-				   sample_resolution, 
-				   star_threshold, 
+	init_starfield(&starfield,
+				   seed,
+				   get_playfield_left(),
+				   get_playfield_top(),
+				   PLAYFIELD_LENGTH,
+				   PLAYFIELD_LENGTH,
+				   sample_resolution,
+				   star_threshold,
 				   noise_scale)
 
 	shaders: Shaders
-	shaders[.FX_Fade_Threshold] = rl.LoadShader(nil, "assets/shaders/threshold.fs")
-
+	// CSDR rm threshold shader
+	// shaders[.FX_Fade_Threshold] = rl.LoadShader(nil, "assets/shaders/threshold.fs")
 	bloom_shader_data := setup_bloom_shader()
-
 	shaders[.FX_Bloom] = bloom_shader_data.shader
 
 	g^ = Game_Memory {
+		app_state = .Running,
+		debug = true,
+
 		resman = resman,
 		audman = audman,
 		render_texture = rl.LoadRenderTexture(LOGICAL_SCREEN_WIDTH * RENDER_TEXTURE_SCALE, 
 											  LOGICAL_SCREEN_HEIGHT * RENDER_TEXTURE_SCALE),
-		app_state = .Running,
-		debug = true,
+
+		shaders = shaders,
+		bloom_shader_data = bloom_shader_data,
+
 		starfield = starfield,
 		end_round_duration_timer = create_timer(END_ROUND_DURATION),
 		end_round_display = "",
-		shaders = shaders,
-		bloom_shader_data = bloom_shader_data,
 	}
 
 	return true
 }
 
-JITTER_NOISE_SCALE_FACTOR :: 0.1
-JITTER_SCALE_FACTOR :: 0.4
+STARFIELD_JITTER_NOISE_SCALE_FACTOR :: 0.1
+STARFIELD_JITTER_SCALE_FACTOR :: 0.4
 init_starfield :: proc(
 	starfield: ^Starfield,
 	seed: i64,
@@ -444,14 +409,14 @@ init_starfield :: proc(
 
 			if noise_val > star_threshold {
 				jitter_noise_x := noise.noise_2d(seed + 1000, 
-					{f64(x) * JITTER_NOISE_SCALE_FACTOR, 
-					f64(y) * JITTER_NOISE_SCALE_FACTOR})
+					{f64(x) * STARFIELD_JITTER_NOISE_SCALE_FACTOR, 
+					f64(y) * STARFIELD_JITTER_NOISE_SCALE_FACTOR})
 				jitter_noise_y := noise.noise_2d(seed + 2000, 
-					{f64(x) * JITTER_NOISE_SCALE_FACTOR, 
-					f64(y) * JITTER_NOISE_SCALE_FACTOR})
+					{f64(x) * STARFIELD_JITTER_NOISE_SCALE_FACTOR, 
+					f64(y) * STARFIELD_JITTER_NOISE_SCALE_FACTOR})
 
-				jitter_x := f32(jitter_noise_x) * sample_resolution * JITTER_SCALE_FACTOR
-				jitter_y := f32(jitter_noise_y) * sample_resolution * JITTER_SCALE_FACTOR
+				jitter_x := f32(jitter_noise_x) * sample_resolution * STARFIELD_JITTER_SCALE_FACTOR
+				jitter_y := f32(jitter_noise_y) * sample_resolution * STARFIELD_JITTER_SCALE_FACTOR
 				pos := Position{math.clamp(x + jitter_x, start_x, start_x + width),
 								math.clamp(y + jitter_y, start_y, start_y + height)}
 				sa.push(starfield_stars, Starfield_Star{position = pos, color = rl.WHITE})
@@ -494,6 +459,8 @@ init :: proc() -> bool {
 		rotation_rate = CENTRAL_STAR_ROTATION_RATE,
 		radius = CENTRAL_STAR_RADIUS,
 	}
+
+	g.central_star_rays = make_central_star_animation_rays(0)
 
 	g.n_rounds = 1
 
@@ -733,14 +700,12 @@ is_real_gamepad :: proc(name: string) -> bool {
 	keyboard_patterns := [?]string{
 		"keyboard", "keychron", "ducky", "anne pro", "hhkb", "ergodox", "kinesis"
 	}
-
 	lower_name := strings.to_lower(name)
 	for pattern in keyboard_patterns {
 		if strings.contains(lower_name, pattern) {
 			return false
 		}
 	}
-
 	return true
 }
 
@@ -773,8 +738,6 @@ get_gamepad_inputs :: proc() -> (gamepad_input_a: Play_Input_Flags, gamepad_inpu
 		}
 	}
 
-	// pr("gamepad1 id ==", gamepad1)
-	// pr("last gamepad button pressed", rl.GetGamepadButtonPressed())
 	gamepad_input_a = get_gamepad_input(gamepad1)
 	gamepad_input_b = get_gamepad_input(gamepad2)
 
@@ -928,8 +891,6 @@ apply_ship_to_star_physics :: proc(ship: ^Ship, star: Star, dt: f32) {
 	ship.velocity += d_vel
 }
 
-Ship_Type :: enum{Wedge, Needle}
-
 init_player :: proc(p: ^Player, ship_type: Ship_Type, position: Position = {}) {
 	p.ship = make_ship(ship_type, position)
 	clear_timer(&p.ship.torpedo_cooldown_timer)
@@ -938,12 +899,8 @@ init_player :: proc(p: ^Player, ship_type: Ship_Type, position: Position = {}) {
 
 draw_sprite :: proc(texture_id: Texture_ID, pos: Vec2, size: Vec2, rotation: f32 = 0, scale: f32 = 1, tint: rl.Color = rl.WHITE) {
 	tex := get_texture(texture_id)
-	src_rect := Rect{
-		0, 0, f32(tex.width), f32(tex.height),
-	}
-	dst_rect := Rect {
-		pos.x, pos.y, size.x, size.y,
-	}
+	src_rect := Rect{0, 0, f32(tex.width), f32(tex.height)}
+	dst_rect := Rect{pos.x, pos.y, size.x, size.y}
 	rl.DrawTexturePro(tex, src_rect, dst_rect, {}, rotation, tint)
 }
 
@@ -1052,7 +1009,6 @@ update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flags, dt: 
 	ship.position.x += ship.velocity.x * dt
 	ship.position.y += ship.velocity.y * dt
 
-	// wraparound
 	wraparound(&ship.position)
 
 	process_timer(&ship.torpedo_cooldown_timer, dt) 
@@ -1070,14 +1026,13 @@ update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flags, dt: 
 }
 
 make_torpedo :: proc(position: Position, velocity: Vec2) -> Torpedo {
-	torp := Torpedo{
+	return Torpedo{
 		position = position,
 		velocity = velocity,
 		lifespan = TORPEDO_LIFESPAN,
 		creation_time = time.now(),
 		radius = TORPEDO_RADIUS,
 	}
-	return torp
 }
 
 spawn_torpedo :: proc(gm: ^Game_Memory, position: Position, velocity: Vec2) {
@@ -1085,8 +1040,12 @@ spawn_torpedo :: proc(gm: ^Game_Memory, position: Position, velocity: Vec2) {
 	sa.push(&gm.torpedos, torp)
 }
 
-make_ship :: proc(ship_type: Ship_Type, position: Position = {-50, -50}, rotation: f32 = 0, mass: f32 = SHIP_DEFAULT_MASS) -> Ship {
-
+make_ship :: proc(
+	ship_type: Ship_Type,
+	position: Position = {-50, -50},
+	rotation: f32 = 0,
+	mass: f32 = SHIP_DEFAULT_MASS,
+) -> Ship {
 	// collision_circles are relative to ship's position
 	collision_circles: Collision_Circles
 
@@ -1199,10 +1158,9 @@ update_play_input :: proc(gm: ^Game_Memory) {
 
 update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 	update_play_input(gm)
-
 	update_starfield(gm, dt)
+	g.central_star.rotation += g.central_star.rotation_rate * dt
 
-	// Step physics and controls
 	for &player in gm.players {
 		if !player.ship.is_destroyed {
 			update_ship(gm, &player.ship, player.input, dt)
@@ -1263,8 +1221,6 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 	for index in sa.slice(&torp_indices_to_destroy) {
 		destroy_torpedo(&gm.torpedos, index)
 	}
-
-	g.central_star.rotation += g.central_star.rotation_rate * dt
 
 	update_particle_system(gm, dt)
 }
@@ -1510,7 +1466,7 @@ draw_playfield :: proc(gm: Game_Memory) {
 	}
 	// rl.EndBlendMode()
 
-	// draw_star(g.central_star)
+	draw_central_star_rays(g.central_star, g.central_star_rays)
 	draw_torpedos(gm.torpedos)
 }
 
@@ -1520,4 +1476,29 @@ draw_end_round :: proc(gm: Game_Memory) {
 	x := get_playfield_left() + get_playfield_width() / 2 - f32(text_length) / 2
 	y := get_playfield_top() + get_playfield_height() / 2 - 64
 	rl.DrawText(cstr, i32(x), i32(y), 32, rl.RED)
+}
+
+make_central_star_animation_rays :: proc(seed: u64) -> sa.Small_Array(CENTRAL_STAR_RAY_COUNT, Star_Ray) {
+	rays: sa.Small_Array(CENTRAL_STAR_RAY_COUNT, Star_Ray)
+	for i := 0; i < CENTRAL_STAR_RAY_COUNT; i += 1 {
+		ray := Star_Ray{
+			angle = rand.float32() * math.TAU,
+			length = 10 + rand.float32() * 20,
+			phase_offset = rand.float32() * math.TAU,
+		}
+		sa.push(&rays, ray)
+	}
+	return rays
+}
+
+draw_central_star_rays :: proc(central_star: Star, rays: Central_Star_Rays) {
+	time := f32(rl.GetTime())
+	rays := rays
+	for ray in sa.slice(&rays) {
+		pulse := math.sin(time * 7 + ray.phase_offset)
+		length := ray.length * (.3 + pulse * 0.7)
+		x := central_star.position.x + length * math.cos(ray.angle + math.to_radians(central_star.rotation))
+		y := central_star.position.y + length * math.sin(ray.angle + math.to_radians(central_star.rotation))
+		rl.DrawLine(i32(central_star.position.x), i32(central_star.position.y), i32(x), i32(y), rl.PURPLE)
+	}
 }
