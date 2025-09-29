@@ -40,7 +40,7 @@ CENTRAL_STAR_RADIUS :: 20
 CENTRAL_STAR_MASS :: 1000000000000000000000
 
 SHIP_DEFAULT_MASS :: 100000000000
-SHIP_DEFAULT_RADIUS :: 20
+SHIP_DEFAULT_RADIUS :: 25
 SHIP_DEFAULT_COLOR :: rl.WHITE
 SHIP_DEFAULT_FUEL_COUNT :: 100
 SHIP_DEFAULT_TORPEDO_COUNT :: 32
@@ -1014,7 +1014,7 @@ update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flags, dt: 
 	process_timer(&ship.torpedo_cooldown_timer, dt) 
 	if .Fire in input {
 		if is_timer_done(ship.torpedo_cooldown_timer) {
-			pos_nose := get_ship_nose_position(ship^)
+			pos_nose := get_torpedo_fire_position(ship^)
 			torp_vel := ship.velocity + TORPEDO_SPEED * vec2_from_rotation(ship.rotation)
 			spawn_torpedo(gm, pos_nose, torp_vel)
 			ship.torpedo_count -= 1
@@ -1051,37 +1051,50 @@ make_ship :: proc(
 
 	switch ship_type {
 	case .Wedge:
-		cc_wedge := Circle{
-			center = 0,
-			radius = SHIP_DEFAULT_RADIUS,
+		cc_r_1 :f32= WEDGE_RADIUS * 0.25
+		cc_1 := Circle{
+			center = { WEDGE_RADIUS * 0.9, 0 },
+			radius = cc_r_1,
 		}
-		sa.push(&collision_circles, cc_wedge)
+		sa.push(&collision_circles, cc_1)
+		cc_r_2 :f32= WEDGE_RADIUS * 0.40
+		cc_2 := Circle{
+			center = { WEDGE_RADIUS * 0.25, 0 },
+			radius = cc_r_2,
+		}
+		sa.push(&collision_circles, cc_2)
+		cc_r_3 :f32= WEDGE_RADIUS * 0.55
+		cc_3 := Circle{
+			center = { -WEDGE_RADIUS * 0.6, 0 },
+			radius = cc_r_3,
+		}
+		sa.push(&collision_circles, cc_3)
 
 	case .Needle:
-		cc_r :f32= SHIP_DEFAULT_RADIUS * 0.35
+		cc_r :f32= SHIP_DEFAULT_RADIUS * 0.25
 		cc_1 := Circle{
-			center = { 1.2 * SHIP_DEFAULT_RADIUS, 0 },
+			center = { NEEDLE_RADIUS * 0.8, 0 },
 			radius = cc_r,
 		}
 		sa.push(&collision_circles, cc_1)
 		cc_2 := Circle{
-			center = { 0.6 * SHIP_DEFAULT_RADIUS, 0 },
+			center = { NEEDLE_RADIUS * 0.4, 0 },
 			radius = cc_r,
 		}
 		sa.push(&collision_circles, cc_2)
 		cc_3 := Circle{
-			center = { -0.6 * SHIP_DEFAULT_RADIUS, 0 },
+			center = { 0, 0 },
 			radius = cc_r,
 		}
 		sa.push(&collision_circles, cc_3)
 		cc_4 := Circle{
-			center = { -1.2 * SHIP_DEFAULT_RADIUS, 0 },
+			center = { NEEDLE_RADIUS * -0.4, 0 },
 			radius = cc_r,
 		}
 		sa.push(&collision_circles, cc_4)
 		cc_5 := Circle{
-			center = { 0, 0 },
-			radius = cc_r,
+			center = { NEEDLE_RADIUS * -0.8  , 0 },
+			radius = cc_r * 1.4,
 		}
 		sa.push(&collision_circles, cc_5)
 	}
@@ -1172,17 +1185,19 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 	// Collide
 	// ship to ship
 
+	// TODO: use ship_a _b below
 	ship_a := gm.players[.A].ship
 	ship_b := gm.players[.B].ship
-	cc_a := sa.get(gm.players[.A].ship.collision_circles, 0)
 	if !ship_a.is_hyperspacing && !ship_b.is_hyperspacing {
-		for cc_b in sa.slice(&gm.players[.B].ship.collision_circles) {
-			if circle_intersects(cc_a.center + ship_a.position, cc_a.radius, cc_b.center + ship_b.position, cc_b.radius) {
-				destroy_ship(gm, &gm.players[.A].ship)
-				destroy_ship(gm, &gm.players[.B].ship)
+		for cc_b in sa.slice(&ship_b.collision_circles) {
+			for cc_a in sa.slice(&ship_a.collision_circles) {
+				if circle_intersects(cc_a.center + ship_a.position, cc_a.radius, cc_b.center + ship_b.position, cc_b.radius) {
+					destroy_ship(gm, &gm.players[.A].ship)
+					destroy_ship(gm, &gm.players[.B].ship)
 
-				end_round(gm, nil)
-				break
+					end_round(gm, nil)
+					break
+				}
 			}
 		}
 	}
@@ -1200,11 +1215,13 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 			}
 		}
 		if !ship_a.is_hyperspacing {
-			if circle_intersects(torp.position, torp.radius, cc_a.center + ship_a.position, cc_a.radius) {
-				destroy_ship(gm, &gm.players[.A].ship)
-				end_round(gm, .B)
-				gm.scores[.B] += 1
-				break torp_collide_outer
+			for cc_a in sa.slice(&g.players[.A].ship.collision_circles) {
+				if circle_intersects(torp.position, torp.radius, cc_a.center + ship_a.position, cc_a.radius) {
+					destroy_ship(gm, &gm.players[.A].ship)
+					end_round(gm, .B)
+					gm.scores[.B] += 1
+					break torp_collide_outer
+				}
 			}
 		}
 	}
@@ -1246,61 +1263,133 @@ destroy_torpedo :: proc(torpedos: ^Torpedos, index: int) {
 	sa.unordered_remove(torpedos, index)
 }
 
-draw_ship_wedge :: proc(ship: Ship) {
-	pos_nose := Vec2{
-		math.cos(ship.rotation) * SHIP_DEFAULT_RADIUS * 1.25,
-		math.sin(ship.rotation) * SHIP_DEFAULT_RADIUS * 1.25,
-	} + ship.position
-	pos_left := Vec2{
-		math.cos(ship.rotation - math.to_radians(f32(145))) * SHIP_DEFAULT_RADIUS,
-		math.sin(ship.rotation - math.to_radians(f32(145))) * SHIP_DEFAULT_RADIUS,
-	} + ship.position
-	pos_right := Vec2{
-		math.cos(ship.rotation + math.to_radians(f32(145))) * SHIP_DEFAULT_RADIUS,
-		math.sin(ship.rotation + math.to_radians(f32(145))) * SHIP_DEFAULT_RADIUS,
-	} + ship.position
-	rl.DrawTriangle(pos_nose, pos_left, pos_right, rl.WHITE)
+WEDGE_RADIUS_FACTOR :: 1
+WEDGE_RADIUS :: SHIP_DEFAULT_RADIUS * WEDGE_RADIUS_FACTOR
+WEDGE_HALF_BERTH :: 6
+WEDGE_POINTS_BODY := [?]Vec2{
+	{SHIP_DEFAULT_RADIUS, 0},
+	{0, -WEDGE_HALF_BERTH},
+	{-SHIP_DEFAULT_RADIUS, 0},
+	{0, WEDGE_HALF_BERTH},
+	{SHIP_DEFAULT_RADIUS, 0}
 }
 
-SHIP_NEEDLE_RADIUS_FACTOR :: 1.5
-SHIP_WEDGE_RADIUS_FACTOR :: 1.25
-get_ship_nose_position :: proc(ship: Ship) -> Position {
-	ship_type_radius_factor: f32
+WEDGE_FIN_HALF_BERTH :: 10
+WEDGE_FIN_OUTER_EDGE_LENGTH :: SHIP_DEFAULT_RADIUS * 0.45
+WEDGE_POINTS_LEFT_FIN := [?]Vec2{
+	{-3,							-6},
+	{-13,							-WEDGE_FIN_HALF_BERTH},
+	{-13 - WEDGE_FIN_OUTER_EDGE_LENGTH,	-WEDGE_FIN_HALF_BERTH},
+	{-13 - WEDGE_FIN_OUTER_EDGE_LENGTH + 5,	-2},
+}
+
+draw_ship_wedge :: proc(ship: Ship) {
+	bp := WEDGE_POINTS_BODY
+	for i in 0..<len(bp)-1 {
+		p1 := rotate_vec2(bp[i], ship.rotation)
+		p2 := rotate_vec2(bp[i+1], ship.rotation)
+		world_p1 := p1 + ship.position
+		world_p2 := p2 + ship.position
+		rl.DrawLineV(world_p1, world_p2, ship.color)
+	}
+
+	lf := WEDGE_POINTS_LEFT_FIN
+	for i in 0..<len(lf)-1 {
+		p1 := rotate_vec2(lf[i], ship.rotation)
+		p2 := rotate_vec2(lf[i+1], ship.rotation)
+		world_p1 := p1 + ship.position
+		world_p2 := p2 + ship.position
+		rl.DrawLineV(world_p1, world_p2, ship.color)
+	}
+	// right fin
+	for i in 0..<len(lf)-1 {
+		o1 := Vec2{lf[i].x, -lf[i].y}
+		o2 := Vec2{lf[i+1].x, -lf[i+1].y}
+		p1 := rotate_vec2(o1, ship.rotation)
+		p2 := rotate_vec2(o2, ship.rotation)
+		world_p1 := p1 + ship.position
+		world_p2 := p2 + ship.position
+		rl.DrawLineV(world_p1, world_p2, ship.color)
+	}
+}
+
+get_torpedo_fire_position :: proc(ship: Ship) -> Position {
+	ship_type_length: f32
 	switch ship.ship_type {
 	case .Needle:
-		ship_type_radius_factor = SHIP_NEEDLE_RADIUS_FACTOR
+		ship_type_length = NEEDLE_RADIUS * 1.2
 	case .Wedge:
-		ship_type_radius_factor =  SHIP_WEDGE_RADIUS_FACTOR
+		ship_type_length =  WEDGE_RADIUS * 1.2
 	}
 	return Vec2{
-			math.cos(ship.rotation) * SHIP_DEFAULT_RADIUS * ship_type_radius_factor,
-			math.sin(ship.rotation) * SHIP_DEFAULT_RADIUS * ship_type_radius_factor,
+			math.cos(ship.rotation) * ship_type_length,
+			math.sin(ship.rotation) * ship_type_length,
 		} + ship.position
 }
 
 get_ship_tail_position :: proc(ship: Ship) -> Position {
-	ship_type_radius_factor: f32
+	ship_type_radius: f32
 	switch ship.ship_type {
 	case .Needle:
-		ship_type_radius_factor = SHIP_NEEDLE_RADIUS_FACTOR
+		ship_type_radius = NEEDLE_RADIUS
 	case .Wedge:
-		ship_type_radius_factor =  SHIP_WEDGE_RADIUS_FACTOR
+		ship_type_radius = WEDGE_RADIUS
 	}
 	return Vec2{
-			math.cos(ship.rotation + math.PI) * SHIP_DEFAULT_RADIUS * ship_type_radius_factor,
-			math.sin(ship.rotation + math.PI) * SHIP_DEFAULT_RADIUS * ship_type_radius_factor,
+			math.cos(ship.rotation + math.PI) * ship_type_radius,
+			math.sin(ship.rotation + math.PI) * ship_type_radius,
 		} + ship.position
 }
 
-draw_ship_needle :: proc(ship: Ship) {
-	half_span_vector := Vec2{
-		math.cos(ship.rotation) * SHIP_DEFAULT_RADIUS * 1.5,
-		math.sin(ship.rotation) * SHIP_DEFAULT_RADIUS * 1.5,
-	} 
+NEEDLE_RADIUS_FACTOR :: 1.2
+NEEDLE_RADIUS :: SHIP_DEFAULT_RADIUS * NEEDLE_RADIUS_FACTOR
+NEEDLE_HALF_BERTH :: 2
+NEEDLE_POINTS_BODY := [?]Vec2{
+	{NEEDLE_RADIUS,		0},
+	{NEEDLE_RADIUS-4,	-NEEDLE_HALF_BERTH},
+	{-NEEDLE_RADIUS,	-NEEDLE_HALF_BERTH},
+	{-NEEDLE_RADIUS,	NEEDLE_HALF_BERTH},
+	{NEEDLE_RADIUS-4,	NEEDLE_HALF_BERTH},
+	{NEEDLE_RADIUS,		0},
+}
 
-	pos_nose := ship.position + half_span_vector
-	pos_tail := ship.position - half_span_vector
-	rl.DrawLineEx(pos_nose, pos_tail, 4, rl.WHITE)
+NEEDLE_FIN_HALF_BERTH :: 6
+NEEDLE_FIN_OUTER_EDGE_LENGTH :: SHIP_DEFAULT_RADIUS * 0.40
+NEEDLE_POINTS_LEFT_FIN := [?]Vec2{
+	{-0.5 * NEEDLE_RADIUS,				-NEEDLE_HALF_BERTH},
+	{-0.5 * NEEDLE_RADIUS - 2,			-NEEDLE_FIN_HALF_BERTH},
+	{-NEEDLE_RADIUS,					-NEEDLE_FIN_HALF_BERTH},
+	{-NEEDLE_RADIUS,					-NEEDLE_HALF_BERTH},
+}
+
+draw_ship_needle :: proc(ship: Ship) {
+	bp := NEEDLE_POINTS_BODY
+	for i in 0..<len(bp)-1 {
+		p1 := rotate_vec2(bp[i], ship.rotation)
+		p2 := rotate_vec2(bp[i+1], ship.rotation)
+		world_p1 := p1 + ship.position
+		world_p2 := p2 + ship.position
+		rl.DrawLineV(world_p1, world_p2, ship.color)
+	}
+
+	lf := NEEDLE_POINTS_LEFT_FIN
+	for i in 0..<len(lf)-1 {
+		p1 := rotate_vec2(lf[i], ship.rotation)
+		p2 := rotate_vec2(lf[i+1], ship.rotation)
+		world_p1 := p1 + ship.position
+		world_p2 := p2 + ship.position
+		rl.DrawLineV(world_p1, world_p2, ship.color)
+	}
+	// right fin
+	for i in 0..<len(lf)-1 {
+		o1 := Vec2{lf[i].x, -lf[i].y}
+		o2 := Vec2{lf[i+1].x, -lf[i+1].y}
+		p1 := rotate_vec2(o1, ship.rotation)
+		p2 := rotate_vec2(o2, ship.rotation)
+		world_p1 := p1 + ship.position
+		world_p2 := p2 + ship.position
+		rl.DrawLineV(world_p1, world_p2, ship.color)
+	}
 }
 
 draw_star :: proc(star: Star) {
