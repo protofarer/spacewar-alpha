@@ -236,7 +236,8 @@ spawn_thrust_particle :: proc(ps: ^Particle_System, pe: Particle_Emitter) {
 	p.velocity = exhaust_vel
 
 	// lateral spread is perpendicular to exhaust
-	lateral_spread := (rand.float32() - 0.5) * 20
+	// CSDR: lateral spread magic numbers, should scale with ship half_berth
+	lateral_spread := (rand.float32() - 0.5) * 10
 	offset := Vec2{0, lateral_spread}
 	rotated_offset := rotate_vec2(offset, pe.rotation)
 	p.position = pe.position + rotated_offset

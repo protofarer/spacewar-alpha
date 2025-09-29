@@ -40,8 +40,8 @@ CENTRAL_STAR_RADIUS :: 20
 CENTRAL_STAR_MASS :: 1000000000000000000000
 
 SHIP_DEFAULT_MASS :: 100000000000
-SHIP_DEFAULT_RADIUS :: 25
-SHIP_DEFAULT_COLOR :: rl.WHITE
+SHIP_DEFAULT_RADIUS :: 20
+SHIP_DEFAULT_COLOR :: rl.GREEN
 SHIP_DEFAULT_FUEL_COUNT :: 100
 SHIP_DEFAULT_TORPEDO_COUNT :: 32
 SHIP_NEEDLE_COLLISION_CIRCLE_RADIUS :: 5
@@ -244,7 +244,7 @@ draw :: proc() {
 	// below from begin_letterbox_rendering, proc is cumbersome and misleading
 	rl.BeginTextureMode(g.render_texture)
 	// rl.ClearBackground(BACKGROUND_COLOR)
-	rl.DrawRectangle(0,0,LOGICAL_SCREEN_WIDTH,LOGICAL_SCREEN_HEIGHT, rl.Fade(rl.BLACK, 0.10))
+	rl.DrawRectangle(0,0,LOGICAL_SCREEN_WIDTH,LOGICAL_SCREEN_HEIGHT, rl.Fade(rl.BLACK, 0.08))
 	
 	// Scale all drawing by RENDER_TEXTURE_SCALE for higher resolution
 	camera := rl.Camera2D{
@@ -443,13 +443,11 @@ init :: proc() -> bool {
 
 
 	player_a: Player
-	init_player(&player_a, .Wedge, {-50, -50})
-	player_a.id = .A
+	init_player(&player_a, .A, .Wedge, {-50, -50})
 	g.players[.A] = player_a
 
 	player_b: Player
-	init_player(&player_b, .Needle, {50, -50})
-	player_b.id = .B
+	init_player(&player_b, .B, .Needle, {50, -50})
 	g.players[.B] = player_b
 
 	g.central_star = Star{
@@ -891,8 +889,9 @@ apply_ship_to_star_physics :: proc(ship: ^Ship, star: Star, dt: f32) {
 	ship.velocity += d_vel
 }
 
-init_player :: proc(p: ^Player, ship_type: Ship_Type, position: Position = {}) {
+init_player :: proc(p: ^Player, player_id: Player_ID, ship_type: Ship_Type, position: Position = {}) {
 	p.ship = make_ship(ship_type, position)
+	p.id = player_id
 	clear_timer(&p.ship.torpedo_cooldown_timer)
 	clear_timer(&p.ship.hyperspace_cooldown_timer)
 }
@@ -971,9 +970,11 @@ draw_debug_overlay :: proc() {
 			debug_overlay_text_column(&x, &y, arr[:])
 		}
 
+		w, h := get_viewport_size()
+		off_x, off_y := get_viewport_offset()
 		{
 			bsd := g.bloom_shader_data
-			x: i32 = i32(get_playfield_right()) + 150
+			x: i32 = i32(-off_x + w)
 			y: i32 = 40
 
 			arr := [?]string{
@@ -1120,9 +1121,47 @@ make_ship :: proc(
 	}
 }
 
+MIN_RANDOM_SHIP_SPAWN_RADIUS_WIDTH_RATIO :: 0.2
+MAX_RANDOM_SHIP_SPAWN_RADIUS_WIDTH_RATIO :: 0.8
+
+find_random_ship_position :: proc() -> (position: Position, angle: f32) {
+	w := get_playfield_width()
+	r := w / 2
+	// dont spawn close to central star
+	min_r := r * MIN_RANDOM_SHIP_SPAWN_RADIUS_WIDTH_RATIO 
+	max_r := r * MAX_RANDOM_SHIP_SPAWN_RADIUS_WIDTH_RATIO 
+
+	rng_dir := rand.float32() * math.TAU
+
+	rng_dist := min_r + rand.float32() * (max_r - min_r)
+	pr("ship angle1", math.to_degrees(rng_dir))
+
+	return Position{rng_dist * math.cos(rng_dir),
+					rng_dist * math.sin(rng_dir)}, rng_dir
+}
+
+// put other ship + 180deg +/- 45deg AND some rng_dist
+find_opposing_ship_position :: proc(other_ship_angle: f32) -> Position {
+	dir_a := other_ship_angle
+	dir_b := dir_a + math.PI + (rand.float32() - 0.5) * math.PI/6
+	w := get_playfield_width()
+	r := w / 2
+	// dont spawn close to central star
+	min_r := r * MIN_RANDOM_SHIP_SPAWN_RADIUS_WIDTH_RATIO 
+	max_r := r * MAX_RANDOM_SHIP_SPAWN_RADIUS_WIDTH_RATIO 
+	rng_dist := min_r + rand.float32() * (max_r - min_r)
+	pr("ship angle", math.to_degrees(dir_a))
+	pr("opp ship angle", math.to_degrees(dir_b))
+
+	return Position{rng_dist * math.cos(dir_b),
+					rng_dist * math.sin(dir_b)}
+}
+
 reset_players :: proc(gm: ^Game_Memory) {
-	init_player(&gm.players[.A], .Wedge, {-50, -50})
-	init_player(&gm.players[.B], .Needle, {50, -50})
+	pos_a, angle_a := find_random_ship_position()
+	pos_b := find_opposing_ship_position(angle_a)
+	init_player(&gm.players[.A], .A, .Wedge, pos_a)
+	init_player(&gm.players[.B], .B, .Needle, pos_b)
 }
 
 clear_torpedos :: proc(gm: ^Game_Memory) {
@@ -1263,9 +1302,9 @@ destroy_torpedo :: proc(torpedos: ^Torpedos, index: int) {
 	sa.unordered_remove(torpedos, index)
 }
 
-WEDGE_RADIUS_FACTOR :: 1
+WEDGE_RADIUS_FACTOR :: .9
 WEDGE_RADIUS :: SHIP_DEFAULT_RADIUS * WEDGE_RADIUS_FACTOR
-WEDGE_HALF_BERTH :: 6
+WEDGE_HALF_BERTH :: WEDGE_RADIUS * 0.25
 WEDGE_POINTS_BODY := [?]Vec2{
 	{SHIP_DEFAULT_RADIUS, 0},
 	{0, -WEDGE_HALF_BERTH},
@@ -1274,13 +1313,13 @@ WEDGE_POINTS_BODY := [?]Vec2{
 	{SHIP_DEFAULT_RADIUS, 0}
 }
 
-WEDGE_FIN_HALF_BERTH :: 10
+WEDGE_FIN_HALF_BERTH :: WEDGE_HALF_BERTH * 2
 WEDGE_FIN_OUTER_EDGE_LENGTH :: SHIP_DEFAULT_RADIUS * 0.45
 WEDGE_POINTS_LEFT_FIN := [?]Vec2{
-	{-3,							-6},
-	{-13,							-WEDGE_FIN_HALF_BERTH},
-	{-13 - WEDGE_FIN_OUTER_EDGE_LENGTH,	-WEDGE_FIN_HALF_BERTH},
-	{-13 - WEDGE_FIN_OUTER_EDGE_LENGTH + 5,	-2},
+	{-WEDGE_RADIUS * 0.05,				-WEDGE_RADIUS * 0.25},
+	{-WEDGE_RADIUS * 0.6,				-WEDGE_FIN_HALF_BERTH},
+	{-WEDGE_RADIUS,	-WEDGE_FIN_HALF_BERTH},
+	{-WEDGE_RADIUS + 5,	-2},
 }
 
 draw_ship_wedge :: proc(ship: Ship) {
@@ -1343,7 +1382,7 @@ get_ship_tail_position :: proc(ship: Ship) -> Position {
 
 NEEDLE_RADIUS_FACTOR :: 1.2
 NEEDLE_RADIUS :: SHIP_DEFAULT_RADIUS * NEEDLE_RADIUS_FACTOR
-NEEDLE_HALF_BERTH :: 2
+NEEDLE_HALF_BERTH :: NEEDLE_RADIUS * .1
 NEEDLE_POINTS_BODY := [?]Vec2{
 	{NEEDLE_RADIUS,		0},
 	{NEEDLE_RADIUS-4,	-NEEDLE_HALF_BERTH},
@@ -1353,8 +1392,8 @@ NEEDLE_POINTS_BODY := [?]Vec2{
 	{NEEDLE_RADIUS,		0},
 }
 
-NEEDLE_FIN_HALF_BERTH :: 6
-NEEDLE_FIN_OUTER_EDGE_LENGTH :: SHIP_DEFAULT_RADIUS * 0.40
+NEEDLE_FIN_HALF_BERTH :: NEEDLE_HALF_BERTH * 2.5
+NEEDLE_FIN_OUTER_EDGE_LENGTH :: NEEDLE_RADIUS * 0.35
 NEEDLE_POINTS_LEFT_FIN := [?]Vec2{
 	{-0.5 * NEEDLE_RADIUS,				-NEEDLE_HALF_BERTH},
 	{-0.5 * NEEDLE_RADIUS - 2,			-NEEDLE_FIN_HALF_BERTH},
