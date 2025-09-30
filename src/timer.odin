@@ -92,7 +92,7 @@ process_timer :: proc(timer: ^Timer, dt: f32) -> bool {
     }
 
 	if timer.interval_type == .Time {
-		timer.accum -= dt
+		timer.accum = max(timer.accum - dt, 0)
 	} else if timer.interval_type == .Tick {
 		timer.accum -= 1
 	}
@@ -130,7 +130,7 @@ get_timer_progress :: proc(timer: Timer) -> f32 {
     if timer.duration <= 0 {
         return 0
     }
-    return min(1 - (timer.accum / timer.duration), 1)
+    return 1 - (timer.accum / timer.duration)
 }
 
 get_time_until_turn :: proc(timer: Timer) -> f32 {
