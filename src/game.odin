@@ -42,7 +42,7 @@ CENTRAL_STAR_MASS :: 1000000000000000000000
 SHIP_DEFAULT_MASS :: 100000000000
 SHIP_DEFAULT_RADIUS :: 20
 SHIP_DEFAULT_COLOR :: rl.GREEN
-SHIP_DEFAULT_FUEL_COUNT :: 100
+SHIP_DEFAULT_FUEL_MAX :: 100
 SHIP_DEFAULT_TORPEDO_COUNT :: 32
 SHIP_NEEDLE_COLLISION_CIRCLE_RADIUS :: 5
 SHIP_DEFAULT_ROTATION_RATE :: 4
@@ -145,10 +145,10 @@ Torpedos :: sa.Small_Array(MAX_LIVE_TORPEDOS, Torpedo)
 
 Star :: struct {
 	position: Position,
-	mass: f32,
+	radius: f32,
 	rotation: f32,
 	rotation_rate: f32,
-	radius: f32,
+	mass: f32,
 }
 
 Starfield_Star :: struct {
@@ -182,7 +182,8 @@ Ship :: struct {
 	rotation: f32,
 	color: rl.Color,
 
-	fuel_count: i32,
+	fuel: f32,
+	max_fuel: f32,
 	torpedo_count: i32,
 	hyperspace_count: i32,
 
@@ -783,7 +784,9 @@ get_play_input :: proc(gm: ^Game_Memory) -> (input_a: Play_Input_Flags, input_b:
 	return input_a, input_b
 }
 
+THRUST_BURN_RATE :: 1
 apply_ship_physics :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flags, dt: f32) {
+
 	// Set necessary state here, including for render
 	ship.is_thrusting = false
 	ship.is_firing = false
@@ -812,6 +815,8 @@ apply_ship_physics :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flag
 
 			ship.velocity += d_vel
 			ship.is_thrusting = true
+
+			ship.fuel = max(ship.fuel - THRUST_BURN_RATE * dt, 0)
 
 			if ship.ship_type == .Wedge {
 				play_continuous_sfx(.Thruster_Wedge)
@@ -873,18 +878,17 @@ apply_ship_physics :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flag
 GRAVITY_COEFFICIENT :: .0000000000667430
 GRAVITY_FORCE_MAX :: 1000000000000000
 METERS_PER_LOGICAL_UNIT_LENGTH :: 10000000
-force_of_gravity :: proc(pos_ship: Vec2, pos_star: Vec2, mass_ship: f32, mass_star: f32) -> Vec2 {
+accel_of_gravity :: proc(pos_ship: Vec2, pos_star: Vec2, mass_other_object: f32) -> Vec2 {
 	d_pos := pos_star - pos_ship
 	distance := linalg.length(d_pos) * METERS_PER_LOGICAL_UNIT_LENGTH
-	fg := clamp(GRAVITY_COEFFICIENT * mass_ship * mass_star / distance, 0, GRAVITY_FORCE_MAX)
+	magnitude := clamp(GRAVITY_COEFFICIENT * mass_other_object / distance, 0, GRAVITY_FORCE_MAX)
 	dir := linalg.normalize0(d_pos)
-	force_vector := fg * dir
-	return force_vector
+	accel_vector := magnitude * dir
+	return accel_vector
 }
 
 apply_ship_to_star_physics :: proc(ship: ^Ship, star: Star, dt: f32) {
-	force_gravity := force_of_gravity(ship.position, star.position, ship.mass, star.mass)
-	accel_gravity_ship := force_gravity / ship.mass
+	accel_gravity_ship := accel_of_gravity(ship.position, star.position, star.mass)
 	d_vel := accel_gravity_ship * dt
 	ship.velocity += d_vel
 }
@@ -933,7 +937,7 @@ draw_debug_overlay :: proc() {
 				fmt.tprintf("pos: %v", ship.position),
 				fmt.tprintf("rot: %v", math.to_degrees(ship.rotation)),
 				fmt.tprintf("mass: %v", ship.mass),
-				fmt.tprintf("fuel_count: %v", ship.fuel_count),
+				fmt.tprintf("fuel: %v", ship.fuel),
 				fmt.tprintf("torp_count: %v", ship.torpedo_count),
 				fmt.tprintf("hyperspace_count: %v", ship.hyperspace_count),
 				fmt.tprintf("is_thrusting: %v", ship.is_thrusting),
@@ -959,7 +963,7 @@ draw_debug_overlay :: proc() {
 				fmt.tprintf("pos: %v", ship.position),
 				fmt.tprintf("rot: %v", math.to_degrees(ship.rotation)),
 				fmt.tprintf("mass: %v", ship.mass),
-				fmt.tprintf("fuel_count: %v", ship.fuel_count),
+				fmt.tprintf("fuel: %v", ship.fuel),
 				fmt.tprintf("torp_count: %v", ship.torpedo_count),
 				fmt.tprintf("hyperspace_count: %v", ship.hyperspace_count),
 				fmt.tprintf("is_thrusting: %v", ship.is_thrusting),
@@ -1005,7 +1009,7 @@ wraparound :: proc(position: ^Position) {
 update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flags, dt: f32) {
 	apply_ship_physics(gm, ship, input, dt)
 
-	// apply_ship_to_star_physics(&player.ship, g.central_star, dt)
+	// apply_ship_to_star_physics(ship, g.central_star, dt)
 
 	ship.position.x += ship.velocity.x * dt
 	ship.position.y += ship.velocity.y * dt
@@ -1109,7 +1113,8 @@ make_ship :: proc(
 		collision_circles = collision_circles,
 		color = SHIP_DEFAULT_COLOR,
 
-		fuel_count = SHIP_DEFAULT_FUEL_COUNT,
+		max_fuel = SHIP_DEFAULT_FUEL_MAX,
+		fuel = SHIP_DEFAULT_FUEL_MAX,
 		torpedo_count = SHIP_DEFAULT_TORPEDO_COUNT,
 		hyperspace_count = 0,
 
@@ -1134,7 +1139,6 @@ find_random_ship_position :: proc() -> (position: Position, angle: f32) {
 	rng_dir := rand.float32() * math.TAU
 
 	rng_dist := min_r + rand.float32() * (max_r - min_r)
-	pr("ship angle1", math.to_degrees(rng_dir))
 
 	return Position{rng_dist * math.cos(rng_dir),
 					rng_dist * math.sin(rng_dir)}, rng_dir
@@ -1150,8 +1154,6 @@ find_opposing_ship_position :: proc(other_ship_angle: f32) -> Position {
 	min_r := r * MIN_RANDOM_SHIP_SPAWN_RADIUS_WIDTH_RATIO 
 	max_r := r * MAX_RANDOM_SHIP_SPAWN_RADIUS_WIDTH_RATIO 
 	rng_dist := min_r + rand.float32() * (max_r - min_r)
-	pr("ship angle", math.to_degrees(dir_a))
-	pr("opp ship angle", math.to_degrees(dir_b))
 
 	return Position{rng_dist * math.cos(dir_b),
 					rng_dist * math.sin(dir_b)}
@@ -1176,6 +1178,14 @@ clear_particle_system :: proc(gm: ^Game_Memory) {
 end_round :: proc(gm: ^Game_Memory, winner: Maybe(Player_ID)) {
 	gm.n_rounds += 1
 	gm.scene = .End_Round
+
+	// reset ship state, (avoid "hanging" sounds and animations)
+	for &player in gm.players {
+		ship := &player.ship
+		ship.is_thrusting = false
+		ship.is_hyperspacing = false
+		ship.is_firing = false
+	}
 
 	if winner, ok := winner.?; ok {
 		ship_name := gm.players[winner].ship.ship_type
@@ -1265,7 +1275,28 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 		}
 	}
 
-	// TODO: collision with central star
+	// collision with central star
+	cs := gm.central_star
+	if !ship_b.is_hyperspacing {
+		for cc_b in sa.slice(&g.players[.B].ship.collision_circles) {
+			if circle_intersects(cs.position, cs.radius, cc_b.center + ship_b.position, cc_b.radius) {
+				destroy_ship(gm, &gm.players[.B].ship)
+				end_round(gm, .A)
+				gm.scores[.A] += 1
+				break
+			}
+		}
+	}
+	if !ship_a.is_hyperspacing {
+		for cc_a in sa.slice(&g.players[.A].ship.collision_circles) {
+			if circle_intersects(cs.position, cs.radius, cc_a.center + ship_a.position, cc_a.radius) {
+				destroy_ship(gm, &gm.players[.A].ship)
+				end_round(gm, .B)
+				gm.scores[.B] += 1
+				break
+			}
+		}
+	}
 
 	// Destroy and cleanup
 	torp_indices_to_destroy: sa.Small_Array(MAX_LIVE_TORPEDOS, int)
@@ -1525,19 +1556,45 @@ draw_topbar :: proc(gm: Game_Memory) {
 		x := x0
 		y := y0
 
+		draw_progress_bar :: proc(x,y,w,h: f32, fill_pct: f32, fill_color: rl.Color, border_color: Maybe(rl.Color), label: Maybe(string), label_color: Maybe(rl.Color)) {
+			// TODO: font scale with height
+			FONT_SIZE :: 20
+			if fill_pct > 1 || fill_pct < 0 {
+				pr("ERROR, invalid fill_pct, must be 0 <= x <= 1:", fill_pct)
+			}
+			if bc, ok := border_color.?; ok {
+				rect_border := Rect{f32(x), f32(y), f32(w), h}
+				rect_fill := Rect{f32(x+1), f32(y+1), (w-2) * fill_pct, h-2}
+				rl.DrawRectangleLinesEx(rect_border, 1, bc)
+				rl.DrawRectangleRec(rect_fill, fill_color)
+			}  else {
+				rect_fill := Rect{f32(x), f32(y), (w) * fill_pct, h}
+				rl.DrawRectangleRec(rect_fill, fill_color)
+			}
+			if lab, ok := label.?; ok {
+				text_width := rl.MeasureText(fmt.ctprintf("%v", lab), FONT_SIZE)
+				x_label := x + w/2 - f32(text_width)/2
+				if lab_col, ok_lab_col := label_color.?; ok_lab_col {
+					rl.DrawText(strings.clone_to_cstring(lab), i32(x_label), i32(y), FONT_SIZE, lab_col)
+				} else {
+					rl.DrawText(strings.clone_to_cstring(lab), i32(x_label), i32(y), FONT_SIZE, rl.WHITE)
+				}
+			}
+		}
+
+		draw_progress_bar(f32(x), f32(y), 200, 18, ship.fuel/ship.max_fuel, rl.RED, rl.WHITE, "FUEL", nil)
+
+		// TODO: when hyperspacing, flash bar
+		hyperspace_cd_pct := get_timer_progress(ship.hyperspace_cooldown_timer)
+		draw_progress_bar(f32(x), f32(y+gap_y+3), 200, 16, hyperspace_cd_pct, rl.GREEN, rl.WHITE, "HYPERSPACE", nil)
+
+		x += 200 + gap_x
 		torp_display := fmt.ctprintf("torpedos: %v", ship.torpedo_count)
 		rl.DrawText(torp_display, x, y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
 
 		hyperspace_count_display := fmt.ctprintf("hspace jumps: %v", ship.hyperspace_count)
 		rl.DrawText(hyperspace_count_display, x, y + gap_y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
 
-		x += rl.MeasureText(torp_display, fs) + gap_x
-		fuel_display := fmt.ctprintf("fuel: %v%%", ship.fuel_count)
-		rl.DrawText(fuel_display, x, y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
-
-		cd := get_timer_progress(ship.hyperspace_cooldown_timer) * 100
-		hyperspace_cooldown_display := fmt.ctprintf("hspace cd: %.f%%", cd)
-		rl.DrawText(hyperspace_cooldown_display, x + 25, y + gap_y, fs, TOPBAR_DEFAULT_TEXT_COLOR)
 	}
 
 	draw_player_display(gm.players[.A].ship, i32(get_screen_left()) + 10, i32(get_screen_top()) + 5, fs, gap_x)

@@ -130,7 +130,7 @@ get_timer_progress :: proc(timer: Timer) -> f32 {
     if timer.duration <= 0 {
         return 0
     }
-    return 1 - (timer.accum / timer.duration)
+    return min(1 - (timer.accum / timer.duration), 1)
 }
 
 get_time_until_turn :: proc(timer: Timer) -> f32 {
