@@ -8,7 +8,8 @@ import rl "vendor:raylib"
 // For: thrust, ship destruction, hyperspace
 Particle :: struct {
 	type: Particle_Type,
-	position, velocity: Vec2,
+	position: Position,
+	velocity: Vec2,
 	color: rl.Color,
 	lifetime: f32,
 	max_lifetime: f32,
@@ -118,7 +119,6 @@ update_emitters :: proc(gm: ^Game_Memory, dt: f32) {
 		process_emitter(gm.particle_system, pe, dt)
 
 		if pe.lifetime >= pe.max_lifetime {
-			// TODO: spawn last burst of particles
 			sa.unordered_remove(&gm.particle_system.transient_emitters, i)
 			transient_emitters = sa.slice(&gm.particle_system.transient_emitters)
 			continue
@@ -126,6 +126,7 @@ update_emitters :: proc(gm: ^Game_Memory, dt: f32) {
 		i += 1
 	}
 
+	// Non-transient emitters
 	for &pe, ship_type in gm.particle_system.thrust_emitters {
 		if ship, ok := get_ship_by_ship_type(gm^, ship_type); ok {
 			update_thrust_emitter_for_ship(&pe, ship)
@@ -147,52 +148,6 @@ update_particles :: proc(ps: ^Particle_System, dt: f32) {
 			sa.unordered_remove(&ps.particles, i)
 			particles = sa.slice(&ps.particles)
 			continue
-		} 
-
-		update_vector_particle :: proc(p: ^Particle, dt: f32) {
-			p.position += p.velocity * dt
-			p.velocity *= 0.98
-
-			p.data1 += dt * 12
-			flicker := 0.8 + 0.2 * math.sin(p.data1)
-
-			// apply fade out curve
-			life_ratio := p.lifetime / p.max_lifetime
-			fade_curve := p.data2
-			alpha := (1.0 - math.pow(life_ratio, fade_curve)) * flicker
-
-			p.color.a = u8(255.0 * alpha)
-		}
-
-		update_explosion_particle :: proc(p: ^Particle, dt: f32) {
-			p.position += p.velocity * dt
-			p.velocity *= 0.99
-
-			// linear fade
-			life_ratio := p.lifetime / p.max_lifetime
-			alpha := (1.0 - life_ratio)
-			p.color.a = u8(255.0 * alpha)
-		}
-
-		update_sparkle_particle :: proc(p: ^Particle, dt: f32) {
-			p.position += p.velocity * dt
-			p.velocity *= 0.97
-
-			// sparkle effect
-			p.data1 += dt * 15.0
-			sparkle := 0.6 + 0.4 * math.sin(p.data1)
-
-			// Pulsing size effect
-			// TODO: particles with size?
-			// p.data2 += dt * 8.0
-			// pulse := 0.8 + 0.2 * math.sin(p.data2)
-
-			// linear fade
-			life_ratio := p.lifetime / p.max_lifetime
-			fade_curve: f32 = 1.2 // slight curve
-			alpha := (1.0 - math.pow(life_ratio, fade_curve)) * sparkle
-			p.color.a = u8(255.0 * alpha)
-
 		}
 
 		switch p.type {
@@ -207,6 +162,56 @@ update_particles :: proc(ps: ^Particle_System, dt: f32) {
 
 		i += 1
 	}
+}
+
+VELOCITY_PARTICLE_FADE_CONSTANT :: 0.98
+update_vector_particle :: proc(p: ^Particle, dt: f32) {
+	p.position += p.velocity * dt
+	p.velocity *= VELOCITY_PARTICLE_FADE_CONSTANT
+
+	p.data1 += dt * 12
+	flicker := 0.8 + 0.2 * math.sin(p.data1)
+
+	// apply fade out curve
+	life_ratio := p.lifetime / p.max_lifetime
+	fade_curve := p.data2
+	alpha := (1.0 - math.pow(life_ratio, fade_curve)) * flicker
+
+	p.color.a = u8(255.0 * alpha)
+}
+
+EXPLOSION_PARTICLE_FADE_CONSTANT :: 0.99
+update_explosion_particle :: proc(p: ^Particle, dt: f32) {
+	p.position += p.velocity * dt
+	p.velocity *= EXPLOSION_PARTICLE_FADE_CONSTANT
+
+	// linear fade
+	life_ratio := p.lifetime / p.max_lifetime
+	alpha := (1.0 - life_ratio)
+	p.color.a = u8(255.0 * alpha)
+}
+
+SPARKLE_PARTICLE_FADE_CONSTANT :: 0.95
+SPARKLE_PARTICLE_SPARKLE_EFFECT_CONSTANT :: 15.0
+SPARKLE_PARTICLE_FADE_CURVE_CONSTANT :: 1.2
+update_sparkle_particle :: proc(p: ^Particle, dt: f32) {
+	p.position += p.velocity * dt
+	p.velocity *= EXPLOSION_PARTICLE_FADE_CONSTANT 
+
+	// sparkle effect
+	p.data1 += dt * SPARKLE_PARTICLE_SPARKLE_EFFECT_CONSTANT
+	sparkle := 0.6 + 0.4 * math.sin(p.data1)
+
+	// Pulsing size effect
+	// CSDR particles with size?
+	// p.data2 += dt * 8.0
+	// pulse := 0.8 + 0.2 * math.sin(p.data2)
+
+	// linear fade
+	life_ratio := p.lifetime / p.max_lifetime
+	fade_curve: f32 = SPARKLE_PARTICLE_FADE_CURVE_CONSTANT // slight curve
+	alpha := (1.0 - math.pow(life_ratio, fade_curve)) * sparkle
+	p.color.a = u8(255.0 * alpha)
 }
 
 spawn_particle :: proc(ps: ^Particle_System, p: Particle) {
@@ -227,6 +232,7 @@ can_spawn_particle :: proc(ps: Particle_System) -> bool {
 
 THRUST_PARTICLE_DEFAULT_SPEED :: 150
 THRUST_PARTICLE_LIFETIME :: 1.1
+THRUST_LATERAL_SPREAD_LENGTH :: 10
 spawn_thrust_particle :: proc(ps: ^Particle_System, pe: Particle_Emitter) {
 	p: Particle
 	p.type = .Vector
@@ -236,8 +242,7 @@ spawn_thrust_particle :: proc(ps: ^Particle_System, pe: Particle_Emitter) {
 	p.velocity = exhaust_vel
 
 	// lateral spread is perpendicular to exhaust
-	// CSDR: lateral spread magic numbers, should scale with ship half_berth
-	lateral_spread := (rand.float32() - 0.5) * 10
+	lateral_spread := (rand.float32() - 0.5) * THRUST_LATERAL_SPREAD_LENGTH 
 	offset := Vec2{0, lateral_spread}
 	rotated_offset := rotate_vec2(offset, pe.rotation)
 	p.position = pe.position + rotated_offset
@@ -274,10 +279,6 @@ spawn_buncha_particles :: proc(ps: ^Particle_System, pe: ^Particle_Emitter) {
 	}
 }
 
-// at ship entry and later exit positions
-// create_hyperspace_emitter :: proc(ps: ^Particle_System, position: Position) {}
-
-// spawn at ship tail, depending on type/dims
 THRUST_EMITTER_SPAWN_RATE :: 25
 THRUST_EMITTER_MAX_LIFETIME :: -1
 make_thrust_emitter :: proc() -> Particle_Emitter {
@@ -320,11 +321,13 @@ spawn_transient_emitter :: proc(ps: ^Particle_System, pe: Particle_Emitter) {
 
 EXPLOSION_PARTICLE_DEFAULT_SPEED :: 100
 EXPLOSION_PARTICLE_LIFETIME :: 4
+EXPLOSION_PARTICLE_SPEED_JITTER_RANGE :: 75
+EXPLOSION_PARTICLE_LIFETIME_JITTER_RANGE :: 1
 spawn_explosion_particle :: proc(ps: ^Particle_System, pe: Particle_Emitter) {
 	p: Particle
 	p.type = .Explosion
 
-	speed := EXPLOSION_PARTICLE_DEFAULT_SPEED - rand.float32() * 75
+	speed := EXPLOSION_PARTICLE_DEFAULT_SPEED - rand.float32() * EXPLOSION_PARTICLE_SPEED_JITTER_RANGE
 	angular_velocity_spread := rand.float32() * 2 * math.PI
 	p.velocity = Vec2{speed * math.cos(angular_velocity_spread),
 					  speed * math.sin(angular_velocity_spread)}
@@ -338,17 +341,12 @@ spawn_explosion_particle :: proc(ps: ^Particle_System, pe: Particle_Emitter) {
 	p.position = pe.position + offset
 
 	p.lifetime = 0
-	p.max_lifetime = EXPLOSION_PARTICLE_LIFETIME + rand.float32() * 1
+	p.max_lifetime = EXPLOSION_PARTICLE_LIFETIME + rand.float32() * EXPLOSION_PARTICLE_LIFETIME_JITTER_RANGE
 
 	p.color = rl.Color{u8(200 + rand.float32() * 55), // 200-255
 					   u8(100 + rand.float32() * 100), // 100-200
 					   u8(rand.float32() * 80), // 0-80
 					   255}
-	// more dramatic?
-	// p.color = rl.Color{u8(180 + rand.float32() * 75),  // Red: 180-255
-	//                   u8(80 + rand.float32() * 120),  // Green: 80-200
-	//                   u8(20 + rand.float32() * 60),   // Blue: 20-80
-	//                   255}
 	spawn_particle(ps, p)
 }
 
@@ -377,16 +375,18 @@ spawn_ship_destruction_emitter :: proc(ps: ^Particle_System, position: Position)
 	spawn_transient_emitter(ps, pe)
 }
 
-
-// HYPERSPACE
-
 HYPERSPACE_PARTICLE_DEFAULT_SPEED :: 75
 HYPERSPACE_PARTICLE_LIFETIME :: 0.8
+HYPERSPACE_PARTICLE_SPEED_JITTER_START_RANGE :: -25
+HYPERSPACE_PARTICLE_SPEED_JITTER_END_RANGE :: 50
+HYPERSPACE_PARTICLE_LIFETIME_JITTER_RANGE :: 0.3
 spawn_hyperspace_particle :: proc(ps: ^Particle_System, pe: Particle_Emitter) {
 	p: Particle
 	p.type = .Sparkle
 
-	speed := HYPERSPACE_PARTICLE_DEFAULT_SPEED + rand.float32_range(-25, 50)
+	speed := HYPERSPACE_PARTICLE_DEFAULT_SPEED + rand.float32_range(
+		HYPERSPACE_PARTICLE_SPEED_JITTER_START_RANGE,
+		HYPERSPACE_PARTICLE_SPEED_JITTER_END_RANGE)
 	angular_velocity_spread := rand.float32() * 2 * math.PI
 	p.velocity = Vec2{speed * math.cos(angular_velocity_spread),
 					  speed * math.sin(angular_velocity_spread)}
@@ -400,7 +400,7 @@ spawn_hyperspace_particle :: proc(ps: ^Particle_System, pe: Particle_Emitter) {
 	p.position = pe.position + offset
 
 	p.lifetime = 0
-	p.max_lifetime = HYPERSPACE_PARTICLE_LIFETIME + rand.float32() * 0.3
+	p.max_lifetime = HYPERSPACE_PARTICLE_LIFETIME + rand.float32() * HYPERSPACE_PARTICLE_LIFETIME_JITTER_RANGE
 
 	p.data1 = rand.float32() * math.TAU // sparkle phase aka twinkling
 	p.data2 = rand.float32() * 2.0 + 0.5 // warp intensity for size pulsing
@@ -450,4 +450,9 @@ make_hyperspace_emitter :: proc(position: Position) -> Particle_Emitter {
 spawn_hyperspace_emitter :: proc(ps: ^Particle_System, position: Position) {
 	pe := make_hyperspace_emitter(position)
 	spawn_transient_emitter(ps, pe)
+}
+
+clear_particle_system :: proc(gm: ^Game_Memory) {
+	sa.clear(&gm.particle_system.transient_emitters)
+	sa.clear(&gm.particle_system.particles)
 }

@@ -28,7 +28,8 @@ files="$OUT_DIR/game.wasm.o ${ODIN_PATH}/vendor/raylib/wasm/libraylib.a ${ODIN_P
 
 # index_template.html contains the javascript code that calls the procedures in
 # src/main_web/main_web.odin
-flags="-sUSE_GLFW=3 -sWASM_BIGINT -sWARN_ON_UNDEFINED_SYMBOLS=0 -sASSERTIONS --shell-file src/main_web/index_template.html --preload-file assets"
+
+flags="-sUSE_GLFW=3 -sMAX_WEBGL_VERSION=2 -sMIN_WEBGL_VERSION=2 -sWASM_BIGINT -sWARN_ON_UNDEFINED_SYMBOLS=0 -sASSERTIONS --shell-file src/main_web/index_template.html --preload-file assets"
 
 # address issues with wasm build
 # memory_flags="-sEXPORTED_RUNTIME_METHODS=HEAPF32 -sINITIAL_MEMORY=67108864 -sALLOW_MEMORY_GROWTH"

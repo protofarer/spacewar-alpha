@@ -2,6 +2,13 @@ package game
 
 import rl "vendor:raylib"
 
+
+Shaders :: [Shader_Kind]rl.Shader
+
+Shader_Kind :: enum {
+	FX_Bloom,
+}
+
 Bloom_Shader :: struct {
 	shader: rl.Shader,
 	resolution_loc: i32,
@@ -15,7 +22,19 @@ Bloom_Shader :: struct {
 }
 
 setup_bloom_shader :: proc() -> Bloom_Shader {
-	shader := rl.LoadShader(nil, "assets/shaders/bloom.fs")
+	// TODO: get enums for windows, mac, wasm
+	shader: rl.Shader
+	when ODIN_OS == .Linux || ODIN_OS == .Darwin || ODIN_OS == .Windows{
+		shader = rl.LoadShader(nil, "assets/shaders/bloom.fs")
+	} else when ODIN_ARCH == .wasm32 {
+		pr("INFO: Loading WebGL shaders...")
+		shader = rl.LoadShader("assets/shaders/bloom_web.vs", "assets/shaders/bloom_web.fs")
+		// shader = rl.LoadShader(nil, "assets/shaders/bloom_web.fs")
+	}
+
+	if shader.id == 0 {
+		pr("ERROR: Failed to load bloom shader")
+	}
 
 	bloom_shader_data: Bloom_Shader
 	bloom_shader_data.shader = shader
