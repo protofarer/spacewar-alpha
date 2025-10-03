@@ -9,6 +9,8 @@ Sound_ID :: enum {
 	Ship_Destruction,
 	Hyperspace_Entry,
 	Hyperspace_Exit,
+	Hyperspace_Ready,
 	Fire_Torpedo,
 	End_Round,
+	Music,
 }

@@ -158,6 +158,7 @@ Ship :: struct {
 	is_destroyed: bool,
 	hyperspace_duration_timer: Timer,
 	hyperspace_cooldown_timer: Timer,
+	has_hyperspace_available_sound_played: bool,
 	r: f32, // canonical length for scaling
 }
 
@@ -202,11 +203,11 @@ update :: proc() {
 		}
 
 		if is_timer_done(g.end_round_duration_timer) {
-			reset_end_round_state(g)
 
 			if end_match_condition(g) {
-				end_match(g)
+				start_end_match(g)
 			} else {
+				reset_end_round_state(g)
 				reset_playfield_objects(g)
 				g.scene = .Play
 			}
@@ -217,9 +218,14 @@ update :: proc() {
 		if is_timer_done(g.end_match_duration_timer) {
 			reset_end_match_state(g)
 			reset_playfield_objects(g)
+			reset_scores(g)
 			g.scene = .Play
 		}
 	}
+}
+
+reset_scores :: proc(gm: ^Game_Memory) {
+	gm.scores = {}
 }
 
 draw :: proc() {
@@ -349,6 +355,7 @@ setup :: proc() -> bool {
 		end_match_duration_timer = create_timer(END_MATCH_DURATION),
 		end_match_display = "",
 	}
+	play_music(.Music)
 
 	return true
 }
@@ -387,6 +394,9 @@ init :: proc() -> bool {
 	ps.thrust_emitters[.Needle] = make_thrust_emitter()
 	g.particle_system = ps
 
+	// tmp
+	g.scores[.A] = 9
+
 	return true
 }
 
@@ -400,7 +410,7 @@ game_update :: proc() {
 @(export)
 game_init_window :: proc() {
 	rl.SetConfigFlags({.WINDOW_RESIZABLE, .VSYNC_HINT})
-	rl.SetTraceLogLevel(.DEBUG)
+	rl.SetTraceLogLevel(.WARNING)
 	rl.InitWindow(WINDOW_W, WINDOW_H, "Spacewar!")
 	when ODIN_OS == .Linux {
 		rl.SetWindowPosition(10, 125)
@@ -738,7 +748,7 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 									 cc_b.radius) {
 					destroy_ship(gm, ship_a)
 					destroy_ship(gm, ship_b)
-					end_round(gm, nil)
+					start_end_round(gm, nil)
 					break
 				}
 			}
@@ -754,7 +764,7 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 									cc_b.center + ship_b.position,
 									cc_b.radius) {
 					destroy_ship(gm, ship_b)
-					end_round(gm, .A)
+					start_end_round(gm, .A)
 					gm.scores[.A] += 1
 					break torp_collide_outer
 				}
@@ -767,7 +777,7 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 									 cc_a.center + ship_a.position,
 									 cc_a.radius) {
 					destroy_ship(gm, ship_a)
-					end_round(gm, .B)
+					start_end_round(gm, .B)
 					gm.scores[.B] += 1
 					break torp_collide_outer
 				}
@@ -784,7 +794,7 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 								 cc_b.center + ship_b.position,
 								 cc_b.radius) {
 				destroy_ship(gm, ship_b)
-				end_round(gm, .A)
+				start_end_round(gm, .A)
 				gm.scores[.A] += 1
 				break
 			}
@@ -797,7 +807,7 @@ update_play_scene :: proc(gm: ^Game_Memory, dt: f32) {
 								 cc_a.center + ship_a.position,
 								 cc_a.radius) {
 				destroy_ship(gm, ship_a)
-				end_round(gm, .B)
+				start_end_round(gm, .B)
 				gm.scores[.B] += 1
 				break
 			}
@@ -892,7 +902,7 @@ make_ship :: proc(
 		ship_type = ship_type,
 		position = position,
 		velocity = 0,
-		rotation = 0,
+		rotation = rotation,
 		mass = SHIP_DEFAULT_MASS,
 		collision_circles = collision_circles,
 		color = SHIP_DEFAULT_COLOR,
@@ -907,6 +917,7 @@ make_ship :: proc(
 		torpedo_cooldown_timer = create_timer(SHIP_DEFAULT_TORPEDO_COOLDOWN),
 		hyperspace_duration_timer = create_timer(SHIP_DEFAULT_HYPERSPACE_DURATION),
 		hyperspace_cooldown_timer = create_timer(SHIP_DEFAULT_HYPERSPACE_COOLDOWN),
+		has_hyperspace_available_sound_played = true,
 		r = r,
 	}
 }
@@ -985,10 +996,10 @@ update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flags, dt: 
 	process_timer(&ship.torpedo_cooldown_timer, dt) 
 	if .Fire in input {
 		if is_timer_done(ship.torpedo_cooldown_timer) {
-			pos_nose := get_torpedo_fire_position(ship^)
+			pos_torpedo := get_torpedo_fire_position(ship^)
 			torp_vel := ship.velocity + TORPEDO_SPEED * vec2_from_rotation(ship.rotation)
 			ship.torpedo_count -= 1
-			spawn_torpedo(gm, pos_nose, torp_vel)
+			spawn_torpedo(gm, pos_torpedo, torp_vel)
 			restart_timer(&ship.torpedo_cooldown_timer)
 
 			ship.is_firing = true
@@ -1049,11 +1060,17 @@ apply_ship_physics :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flag
 	}
 
 	process_timer(&ship.hyperspace_cooldown_timer, dt)
+	// TODO: play hyperspace_ready sound when cooldown over
+	if is_timer_done(ship.hyperspace_cooldown_timer) && !ship.has_hyperspace_available_sound_played && !ship.is_hyperspacing {
+		play_sfx(.Hyperspace_Ready)
+		ship.has_hyperspace_available_sound_played = true
+	}
 
 	if .Hyperspace in input && !ship.is_hyperspacing && is_timer_done(ship.hyperspace_cooldown_timer) { 
 		restart_timer(&ship.hyperspace_duration_timer)
 		ship.is_hyperspacing = true
 		ship.hyperspace_count += 1
+		ship.has_hyperspace_available_sound_played = false
 		play_sfx(.Hyperspace_Entry)
 		spawn_hyperspace_emitter(gm.particle_system, ship.position)
 	}
@@ -1236,7 +1253,7 @@ destroy_torpedo :: proc(torpedos: ^Torpedos, index: int) {
 	sa.unordered_remove(torpedos, index)
 }
 
-TORPEDO_SPACING_FACTOR :: 1.2
+TORPEDO_SPACING_FACTOR :: 1.5
 get_torpedo_fire_position :: proc(ship: Ship) -> Position {
 	distance := ship.r * TORPEDO_SPACING_FACTOR
 	return Vec2{
@@ -1260,7 +1277,7 @@ draw_torpedos :: proc(torps: Torpedos) {
 
 STARFIELD_JITTER_NOISE_SCALE_FACTOR :: 0.1
 STARFIELD_JITTER_SCALE_FACTOR :: 0.4
-	STARFIELD_VELOCITY :: Vec2{100,0}
+STARFIELD_VELOCITY :: Vec2{50,0}
 init_starfield :: proc(
 	starfield: ^Starfield,
 	seed: i64,
@@ -1417,13 +1434,14 @@ draw_playfield :: proc(gm: Game_Memory) {
 
 // Rounds and Match ///////////////////////////////////////////////////////////////////////
 
-end_match :: proc(gm: ^Game_Memory) {
+start_end_match :: proc(gm: ^Game_Memory) {
+	gm.scene = .End_Match
 	match_winner :Player_ID= gm.scores[.A] > gm.scores[.B] ? .A : .B
 	gm.end_match_display = fmt.aprintf("%v wins the match!", gm.players[match_winner].ship.ship_type)
 	start_timer(&gm.end_match_duration_timer)
 }
 
-end_round :: proc(gm: ^Game_Memory, winner: Maybe(Player_ID)) {
+start_end_round :: proc(gm: ^Game_Memory, winner: Maybe(Player_ID)) {
 	gm.n_rounds += 1
 	gm.scene = .End_Round
 
@@ -1461,7 +1479,7 @@ end_match_condition :: proc(gm: ^Game_Memory) -> bool {
 }
 
 END_ROUND_FONT_SIZE :: 48
-END_ROUND_TEXT_COLOR :: rl.GOLD
+END_ROUND_TEXT_COLOR :: rl.BLUE
 draw_end_round :: proc(gm: Game_Memory) {
 	x := get_centered_text_x_coord(gm.end_round_display, END_ROUND_FONT_SIZE, i32(get_playfield_left() + get_playfield_width() / 2))
 	cstr := fmt.ctprintf(gm.end_round_display)
@@ -1469,11 +1487,12 @@ draw_end_round :: proc(gm: Game_Memory) {
 	rl.DrawText(cstr, i32(x), i32(y), END_ROUND_FONT_SIZE, END_ROUND_TEXT_COLOR )
 }
 
+END_MATCH_TEXT_COLOR :: rl.YELLOW
 draw_end_match :: proc(gm: Game_Memory) {
 	x := get_centered_text_x_coord(gm.end_match_display, END_ROUND_FONT_SIZE, i32(get_playfield_left() + get_playfield_width() / 2))
-	y := get_playfield_top() + get_playfield_height() / 2 - 64
+	y := get_playfield_top() + get_playfield_height() / 2 - 64 + 48
 	cstr := fmt.ctprintf(gm.end_match_display)
-	rl.DrawText(cstr, i32(x), i32(y), END_ROUND_FONT_SIZE, END_ROUND_TEXT_COLOR )
+	rl.DrawText(cstr, i32(x), i32(y), END_ROUND_FONT_SIZE, END_MATCH_TEXT_COLOR )
 }
 
 FUEL_BAR_FILL_COLOR :: rl.GREEN
@@ -1544,8 +1563,8 @@ draw_topbar :: proc(gm: Game_Memory) {
 
 // INIT ////////////////////////////////////////////////////////////////////////////////////////
 
-init_player :: proc(p: ^Player, player_id: Player_ID, ship_type: Ship_Type, position: Position = {}) {
-	p.ship = make_ship(ship_type, position)
+init_player :: proc(p: ^Player, player_id: Player_ID, ship_type: Ship_Type, position: Position = {}, rotation: f32 = 0) {
+	p.ship = make_ship(ship_type, position, rotation)
 	p.id = player_id
 	clear_timer(&p.ship.torpedo_cooldown_timer)
 	clear_timer(&p.ship.hyperspace_cooldown_timer)
@@ -1558,8 +1577,10 @@ init_player :: proc(p: ^Player, player_id: Player_ID, ship_type: Ship_Type, posi
 
 reset_players :: proc(gm: ^Game_Memory) {
 	pos_a, pos_b := find_ship_spawn_positions()
-	init_player(&gm.players[.A], .A, .Wedge, pos_a)
-	init_player(&gm.players[.B], .B, .Needle, pos_b)
+	rng_dir1 := rand.float32() * math.TAU
+	rng_dir2 := rand.float32() * math.TAU
+	init_player(&gm.players[.A], .A, .Wedge, pos_a, rng_dir1)
+	init_player(&gm.players[.B], .B, .Needle, pos_b, rng_dir2)
 }
 
 reset_playfield_objects :: proc(gm: ^Game_Memory) {
