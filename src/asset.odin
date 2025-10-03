@@ -13,6 +13,9 @@ Sound_ID :: enum {
 	Fire_Torpedo,
 	Empty_Fire,
 	End_Round,
-	Music,
 	Game_Over,
+}
+
+Music_ID :: enum {
+	Background,
 }

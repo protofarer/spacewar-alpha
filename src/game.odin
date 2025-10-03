@@ -12,6 +12,8 @@ import rl "vendor:raylib"
 
 Position :: Vec2
 
+RAYLIB_TRACELOGLEVEL :: rl.TraceLogLevel.WARNING
+
 WINDOW_W :: 1600
 WINDOW_H :: 900
 TICK_RATE :: 120
@@ -182,12 +184,13 @@ g: ^Game_Memory
 update :: proc() {
 	dt := rl.GetFrameTime()
 
-	update_audio_manager()
 	process_global_input()
 
 	if g.pause {
 		return
 	}
+
+	update_audio_manager()
 
 	switch g.scene {
 	case .Play:
@@ -355,7 +358,8 @@ setup :: proc() -> bool {
 		end_match_duration_timer = create_timer(END_MATCH_DURATION),
 		end_match_display = "",
 	}
-	play_music(.Music)
+	// TODO:
+	play_music(.Background)
 
 	return true
 }
@@ -410,7 +414,7 @@ game_update :: proc() {
 @(export)
 game_init_window :: proc() {
 	rl.SetConfigFlags({.WINDOW_RESIZABLE, .VSYNC_HINT})
-	rl.SetTraceLogLevel(.WARNING)
+	rl.SetTraceLogLevel(RAYLIB_TRACELOGLEVEL)
 	rl.InitWindow(WINDOW_W, WINDOW_H, "Spacewar!")
 	when ODIN_OS == .Linux {
 		rl.SetWindowPosition(10, 125)
