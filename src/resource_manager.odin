@@ -233,9 +233,12 @@ get_sound :: proc(id: Sound_ID) -> rl.Sound {
     return sound
 }
 
-get_music :: proc(id: Music_ID) -> rl.Music {
+get_music :: proc(id: Music_ID) -> Maybe(rl.Music) {
     music := g.resman.music[id]
-    if music == {} do log.error("Failed to get music", id)
+    if music == {} {
+		log.error("Failed to get music", id)
+		return nil
+	}
     return music
 }
 

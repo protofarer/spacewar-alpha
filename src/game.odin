@@ -1490,17 +1490,19 @@ end_match_condition :: proc(gm: ^Game_Memory) -> bool {
 
 END_ROUND_FONT_SIZE :: 48
 END_ROUND_TEXT_COLOR :: rl.BLUE
+END_ROUND_TEXT_OFFSET_Y :: -96
 draw_end_round :: proc(gm: Game_Memory) {
 	x := get_centered_text_x_coord(gm.end_round_display, END_ROUND_FONT_SIZE, i32(get_playfield_left() + get_playfield_width() / 2))
 	cstr := fmt.ctprintf(gm.end_round_display)
-	y := get_playfield_top() + get_playfield_height() / 2 - 64
+	y := get_playfield_top() + get_playfield_height() / 2 + END_ROUND_TEXT_OFFSET_Y
 	rl.DrawText(cstr, i32(x), i32(y), END_ROUND_FONT_SIZE, END_ROUND_TEXT_COLOR )
 }
 
 END_MATCH_TEXT_COLOR :: rl.YELLOW
+END_MATCH_TEXT_Y_OFFSET :: 16
 draw_end_match :: proc(gm: Game_Memory) {
 	x := get_centered_text_x_coord(gm.end_match_display, END_ROUND_FONT_SIZE, i32(get_playfield_left() + get_playfield_width() / 2))
-	y := get_playfield_top() + get_playfield_height() / 2 - 64 + 48
+	y := get_playfield_top() + get_playfield_height() / 2 + END_MATCH_TEXT_Y_OFFSET
 	cstr := fmt.ctprintf(gm.end_match_display)
 	rl.DrawText(cstr, i32(x), i32(y), END_ROUND_FONT_SIZE, END_MATCH_TEXT_COLOR )
 }

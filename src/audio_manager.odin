@@ -36,8 +36,7 @@ init_audio_manager :: proc() -> Audio_Manager {
 
 update_audio_manager :: proc() {
 	am := &g.audman
-	if m_id, ok := get_current_music_id().?; ok {
-		m := get_music(m_id)
+	if m, ok := get_current_music().?; ok {
 		rl.UpdateMusicStream(m)
 	}
 }
@@ -54,12 +53,11 @@ set_sfx_volume :: proc(volume: f32) {
 }
 
 set_music_volume :: proc(volume: f32) {
-	am := g.audman
+	am := &g.audman
     am.music_volume = clamp(volume, 0.0, 1.0)
-    if current_music_id := am.current_music_id; current_music_id != nil {
-        music := get_music(current_music_id.?)
-        rl.SetMusicVolume(music, am.music_volume * am.master_volume)
-    }
+    if m, ok := get_current_music().?; ok {
+        rl.SetMusicVolume(m, am.music_volume * am.master_volume)
+	}
 }
 
 toggle_mute :: proc() {
@@ -107,20 +105,20 @@ play_music :: proc(id: Music_ID, loop: bool = true) {
     am.music_loop = loop
     am.music_state = .Playing
 
-    music := get_music(id)
-	vol := am.music_volume * am.master_volume
-    rl.SetMusicVolume(music, vol)
-    rl.PlayMusicStream(music)
-    log.debugf("Started playing music: %v (loop: %v)", id, loop)
+    if music, ok := get_music(id).?; ok {
+		vol := am.music_volume * am.master_volume
+		rl.SetMusicVolume(music, vol)
+		rl.PlayMusicStream(music)
+		log.debugf("Started playing music: %v (loop: %v)", id, loop)
+	}
 }
 
 // TODO: use get_current_music_id and Maybe access
 stop_music :: proc() {
 	am := &g.audman
-    if current_music_id := am.current_music_id; current_music_id != nil {
-        music := get_music(current_music_id.?)
-        rl.StopMusicStream(music)
-        log.debugf("Stopped music: %v", current_music_id)
+	if m, ok := get_current_music().?; ok {
+        rl.StopMusicStream(m)
+        log.debugf("Stopped music")
     }
     am.current_music_id = nil
     am.music_state = .Stopped
@@ -129,36 +127,37 @@ stop_music :: proc() {
 // TODO: use get_current_music_id and Maybe access
 pause_music :: proc() {
 	am := &g.audman
-    if current_music_id := am.current_music_id; current_music_id != nil && am.music_state == .Playing {
-        music := get_music(current_music_id.?)
-        rl.PauseMusicStream(music)
+	if m, ok := get_current_music().?; ok && am.music_state == .Playing {
+        rl.PauseMusicStream(m)
         am.music_state = .Paused
-        log.debugf("Paused music: %v", current_music_id)
+        log.debugf("Paused music")
     }
 }
 
-// TODO: use get_current_music_id and Maybe access
 resume_music :: proc() {
 	am := &g.audman
-    if current_music_id := am.current_music_id; current_music_id != nil && am.music_state == .Paused {
-        music := get_music(current_music_id.?)
-        rl.ResumeMusicStream(music)
-        am.music_state = .Playing
-        log.debugf("Resumed music: %v", current_music_id)
-    }
+	if m, ok := get_current_music().?; ok && am.music_state == .Paused {
+		rl.ResumeMusicStream(m)
+		log.debugf("Resumed music")
+		am.music_state = .Playing
+	}
 }
 
 restart_music :: proc() {
 	am := &g.audman
-    if m_id, ok := get_current_music_id().?; ok {
-		m := get_music(m_id)
+    if m, ok := get_current_music().?; ok {
 		rl.StopMusicStream(m)
 		rl.PlayMusicStream(m)
-        log.debugf("Restarted music: %v", current_music_id)
+        log.debugf("Restarted music")
     }
 }
 
-// TODO: get_current_music :: proc() -> Maybe(rl.Music) {}
+get_current_music :: proc() -> Maybe(rl.Music) {
+	if m_id, ok_m_id := get_current_music_id().?; ok_m_id {
+		return get_music(m_id)
+	}
+	return nil
+}
 
 // TODO: use raylib
 is_music_playing :: proc() -> bool {
