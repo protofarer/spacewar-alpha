@@ -11,6 +11,8 @@ Sound_ID :: enum {
 	Hyperspace_Exit,
 	Hyperspace_Ready,
 	Fire_Torpedo,
+	Empty_Fire,
 	End_Round,
 	Music,
+	Game_Over,
 }

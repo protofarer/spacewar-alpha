@@ -996,14 +996,19 @@ update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flags, dt: 
 	process_timer(&ship.torpedo_cooldown_timer, dt) 
 	if .Fire in input {
 		if is_timer_done(ship.torpedo_cooldown_timer) {
-			pos_torpedo := get_torpedo_fire_position(ship^)
-			torp_vel := ship.velocity + TORPEDO_SPEED * vec2_from_rotation(ship.rotation)
-			ship.torpedo_count -= 1
-			spawn_torpedo(gm, pos_torpedo, torp_vel)
-			restart_timer(&ship.torpedo_cooldown_timer)
+			if ship.torpedo_count > 0 {
+				pos_torpedo := get_torpedo_fire_position(ship^)
+				torp_vel := ship.velocity + TORPEDO_SPEED * vec2_from_rotation(ship.rotation)
+				ship.torpedo_count -= 1
+				spawn_torpedo(gm, pos_torpedo, torp_vel)
+				restart_timer(&ship.torpedo_cooldown_timer)
 
-			ship.is_firing = true
-			play_sfx(.Fire_Torpedo)
+				ship.is_firing = true
+				play_sfx(.Fire_Torpedo)
+			} else {
+				// play empty sound
+				play_sfx(.Empty_Fire)
+			}
 		}
 	}
 }
@@ -1060,7 +1065,6 @@ apply_ship_physics :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flag
 	}
 
 	process_timer(&ship.hyperspace_cooldown_timer, dt)
-	// TODO: play hyperspace_ready sound when cooldown over
 	if is_timer_done(ship.hyperspace_cooldown_timer) && !ship.has_hyperspace_available_sound_played && !ship.is_hyperspacing {
 		play_sfx(.Hyperspace_Ready)
 		ship.has_hyperspace_available_sound_played = true
@@ -1071,6 +1075,7 @@ apply_ship_physics :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flag
 		ship.is_hyperspacing = true
 		ship.hyperspace_count += 1
 		ship.has_hyperspace_available_sound_played = false
+		ship.hyperspace_count += 1
 		play_sfx(.Hyperspace_Entry)
 		spawn_hyperspace_emitter(gm.particle_system, ship.position)
 	}
@@ -1438,6 +1443,7 @@ start_end_match :: proc(gm: ^Game_Memory) {
 	gm.scene = .End_Match
 	match_winner :Player_ID= gm.scores[.A] > gm.scores[.B] ? .A : .B
 	gm.end_match_display = fmt.aprintf("%v wins the match!", gm.players[match_winner].ship.ship_type)
+	play_sfx(.Game_Over)
 	start_timer(&gm.end_match_duration_timer)
 }
 
