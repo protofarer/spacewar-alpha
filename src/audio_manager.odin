@@ -3,7 +3,6 @@ package game
 import "core:log"
 import rl "vendor:raylib"
 
-// TODO: remove extra music state, since depending on raylib. Maybe music_loop and music_state?
 // TODO: don't use audman global, procs are getting confusing about whether audman var is a pointer or value
 
 Audio_Manager :: struct {
@@ -13,7 +12,6 @@ Audio_Manager :: struct {
     music_volume: f32,
     current_music_id: Maybe(Music_ID),
     music_state: Music_State,
-    music_loop: bool,
 }
 
 Music_State :: enum {
@@ -30,7 +28,6 @@ init_audio_manager :: proc() -> Audio_Manager {
         muted = false,
         current_music_id = nil,
         music_state = .Stopped,
-        music_loop = true,
     }
 }
 
@@ -93,8 +90,6 @@ play_continuous_sfx :: proc(id: Sound_ID) {
 	}
 }
 
-// TODO: rm any duplicate state that raylib already handles?
-// TODO: set rl.Music loop accordingly
 play_music :: proc(id: Music_ID, loop: bool = true) {
 	am := &g.audman
     if am.muted do return
@@ -102,18 +97,26 @@ play_music :: proc(id: Music_ID, loop: bool = true) {
     stop_music()
 
     am.current_music_id = id
-    am.music_loop = loop
     am.music_state = .Playing
 
     if music, ok := get_music(id).?; ok {
 		vol := am.music_volume * am.master_volume
+		music.looping = loop
 		rl.SetMusicVolume(music, vol)
 		rl.PlayMusicStream(music)
 		log.debugf("Started playing music: %v (loop: %v)", id, loop)
 	}
 }
 
-// TODO: use get_current_music_id and Maybe access
+is_music_looping :: proc(id: Music_ID) -> bool {
+	if music, ok := get_music(id).?; ok {
+		if music.looping {
+			return true
+		}
+	}
+	return false
+}
+
 stop_music :: proc() {
 	am := &g.audman
 	if m, ok := get_current_music().?; ok {
@@ -124,7 +127,6 @@ stop_music :: proc() {
     am.music_state = .Stopped
 }
 
-// TODO: use get_current_music_id and Maybe access
 pause_music :: proc() {
 	am := &g.audman
 	if m, ok := get_current_music().?; ok && am.music_state == .Playing {

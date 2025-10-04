@@ -7,6 +7,7 @@ import "core:math"
 import "core:math/linalg"
 import "core:math/noise"
 import "core:math/rand"
+import "core:strings"
 import sa "core:container/small_array"
 import rl "vendor:raylib"
 
@@ -71,6 +72,7 @@ App_State :: enum {
 }
 
 Scene :: enum {
+	Title,
 	Play,
 	End_Round,
 	End_Match,
@@ -114,7 +116,7 @@ Starfield :: struct {
 
 CENTRAL_STAR_ROTATION_RATE :: 100
 CENTRAL_STAR_RADIUS :: 20
-CENTRAL_STAR_MASS :: 1000000000000000000000
+CENTRAL_STAR_MASS :: 500000000000000000000
 CENTRAL_STAR_RAY_COUNT :: 64
 Star_Ray :: struct {
 	angle, length, phase_offset: f32,
@@ -128,11 +130,12 @@ SHIP_DEFAULT_FUEL_MAX :: 100
 SHIP_DEFAULT_TORPEDO_COUNT :: 32
 SHIP_NEEDLE_COLLISION_CIRCLE_RADIUS :: 5
 SHIP_DEFAULT_ROTATION_RATE :: 4
-SHIP_DEFAULT_THRUST_FORCE :: 5000000000000
+SHIP_DEFAULT_THRUST_FORCE :: 1000000000000
 SHIP_DEFAULT_TORPEDO_COOLDOWN :: 0.8
 SHIP_DEFAULT_HYPERSPACE_DURATION :: 3
 SHIP_DEFAULT_HYPERSPACE_COOLDOWN :: 12
 SHIP_TORPEDO_INITIAL_COUNT :: 32
+SHIP_FUEL_BURN_RATE :: 2
 
 Ship_Rotation_Direction :: enum {Left, Right}
 Ship_Type :: enum{Wedge, Needle}
@@ -193,6 +196,10 @@ update :: proc() {
 	update_audio_manager()
 
 	switch g.scene {
+	case .Title:
+		if rl.IsKeyPressed(.ENTER) {
+			g.scene = .Play
+		}
 	case .Play:
 		update_play_scene(g, dt)
 		
@@ -245,6 +252,8 @@ draw :: proc() {
 	rl.BeginMode2D(camera)
 
 	switch g.scene {
+	case .Title:
+		draw_title(g^)
 	case .Play:
 		draw_playfield(g^)
 		draw_topbar(g^)
@@ -298,6 +307,7 @@ draw :: proc() {
 	rl.EndDrawing()
 }
  
+TITLE_DURATION :: 6
 // Run once: allocate, set global variable immutable values
 setup :: proc() -> bool {
 	g = new(Game_Memory)
@@ -358,7 +368,6 @@ setup :: proc() -> bool {
 		end_match_duration_timer = create_timer(END_MATCH_DURATION),
 		end_match_display = "",
 	}
-	// TODO:
 	play_music(.Background)
 
 	return true
@@ -372,14 +381,14 @@ init :: proc() -> bool {
 	}
 	g.scene = .Play
 
-
 	player_a: Player
-	init_player(&player_a, .A, .Wedge, {-50, -50})
+	init_player(&player_a, .A, .Wedge, {-200, -200})
 	g.players[.A] = player_a
 
 	player_b: Player
-	init_player(&player_b, .B, .Needle, {50, -50})
+	init_player(&player_b, .B, .Needle, {200, -200})
 	g.players[.B] = player_b
+	// reset_players(g)
 
 	g.central_star = Star{
 		position = {0,0},
@@ -649,7 +658,7 @@ get_keyboard_inputs :: proc() -> (input_a: Play_Input_Flags, input_b: Play_Input
 	if rl.IsKeyDown(.RIGHT) {
 		input_b += {.Rotate_Right}
 	}
-	if rl.IsKeyPressed(.ENTER) {
+	if rl.IsKeyPressed(.RIGHT_SHIFT) {
 		input_b += {.Hyperspace}
 	}
 
@@ -943,7 +952,7 @@ find_random_ship_position :: proc() -> (position: Position, angle: f32) {
 					rng_dist * math.sin(rng_dir)}, rng_dir
 }
 
-find_opposing_ship_position :: proc(other_ship_angle: f32) -> Position {
+find_opposing_ship_position_random_distance :: proc(other_ship_angle: f32) -> Position {
 	// put at: other ship + 180deg +/- 45deg AND some rng_dist
 	dir_a := other_ship_angle
 	dir_b := dir_a + math.PI + (rand.float32() - 0.5) * math.PI/6
@@ -958,9 +967,31 @@ find_opposing_ship_position :: proc(other_ship_angle: f32) -> Position {
 					rng_dist * math.sin(dir_b)}
 }
 
-find_ship_spawn_positions :: proc() -> (a: Position, b: Position) {
+find_ship_spawn_positions_random_distance :: proc() -> (a: Position, b: Position) {
 	pos_a, angle_a := find_random_ship_position()
-	pos_b := find_opposing_ship_position(angle_a)
+	pos_b := find_opposing_ship_position_random_distance(angle_a)
+	return pos_a, pos_b
+}
+
+find_opposing_ship_position_same_distance :: proc(other_ship_position: Position, other_ship_angle: f32) -> Position {
+	// put at: other ship + 180deg +/- 45deg AND some rng_dist
+	dir_a := other_ship_angle
+	dir_b := dir_a + math.PI + (rand.float32() - 0.5) * math.PI/6
+	w := get_playfield_width()
+	r := w / 2
+	// dont spawn close to central star
+	min_r := r * MIN_RANDOM_SHIP_SPAWN_RADIUS_WIDTH_RATIO 
+	max_r := r * MAX_RANDOM_SHIP_SPAWN_RADIUS_WIDTH_RATIO 
+
+	dist := linalg.length(other_ship_position)
+
+	return Position{dist * math.cos(dir_b),
+					dist * math.sin(dir_b)}
+}
+
+find_ship_spawn_positions_same_distance :: proc() -> (a: Position, b: Position) {
+	pos_a, angle_a := find_random_ship_position()
+	pos_b := find_opposing_ship_position_same_distance(pos_a, angle_a)
 	return pos_a, pos_b
 }
 
@@ -991,12 +1022,10 @@ get_ship_by_ship_type :: proc(gm: Game_Memory, ship_type: Ship_Type) -> (ship: S
 update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flags, dt: f32) {
 	apply_ship_physics(gm, ship, input, dt)
 
-	// apply_ship_to_star_physics(ship, g.central_star, dt)
-
-	ship.position.x += ship.velocity.x * dt
-	ship.position.y += ship.velocity.y * dt
+	ship.position += ship.velocity * dt
 
 	wraparound_spacewar(&ship.position)
+
 	process_timer(&ship.torpedo_cooldown_timer, dt) 
 	if .Fire in input {
 		if is_timer_done(ship.torpedo_cooldown_timer) {
@@ -1015,9 +1044,26 @@ update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flags, dt: 
 			}
 		}
 	}
+
+	if ship.is_thrusting {
+		if ship.ship_type == .Wedge {
+			play_continuous_sfx(.Thruster_Wedge)
+		} else {
+			play_continuous_sfx(.Thruster_Needle)
+		}
+	} else {
+		if ship.ship_type == .Wedge {
+			if is_sfx_playing(.Thruster_Wedge) {
+				stop_sfx(.Thruster_Wedge)
+			}
+		} else {
+			if is_sfx_playing(.Thruster_Needle) {
+				stop_sfx(.Thruster_Needle)
+			}
+		}
+	}
 }
 
-THRUST_BURN_RATE :: 1
 apply_ship_physics :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flags, dt: f32) {
 	// Set necessary state here, eg: rendering related
 	ship.is_thrusting = false
@@ -1043,29 +1089,18 @@ apply_ship_physics :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flag
 			acc := thrust_force / ship.mass
 
 			// apply to vel: vel += accel * dt
-			d_vel := acc * dt
+			dvel_acc := acc * dt
 
-			ship.velocity += d_vel
+			ship.velocity += dvel_acc
 			ship.is_thrusting = true
 
-			ship.fuel = max(ship.fuel - THRUST_BURN_RATE * dt, 0)
+			ship.fuel = max(ship.fuel - SHIP_FUEL_BURN_RATE * dt, 0)
+		} 
 
-			if ship.ship_type == .Wedge {
-				play_continuous_sfx(.Thruster_Wedge)
-			} else {
-				play_continuous_sfx(.Thruster_Needle)
-			}
-		} else {
-			if ship.ship_type == .Wedge {
-				if is_sfx_playing(.Thruster_Wedge) {
-					stop_sfx(.Thruster_Wedge)
-				}
-			} else {
-				if is_sfx_playing(.Thruster_Needle) {
-					stop_sfx(.Thruster_Needle)
-				}
-			}
-		}
+		// Central star gravity
+		acc_star := accel_of_gravity(ship.position, gm.central_star.position, gm.central_star.mass)
+		dvel_acc_star := acc_star * dt
+		ship.velocity += dvel_acc_star
 	}
 
 	process_timer(&ship.hyperspace_cooldown_timer, dt)
@@ -1118,12 +1153,6 @@ accel_of_gravity :: proc(pos_ship: Vec2, pos_star: Vec2, mass_other_object: f32)
 	dir := linalg.normalize0(d_pos)
 	accel_vector := magnitude * dir
 	return accel_vector
-}
-
-apply_ship_to_star_physics :: proc(ship: ^Ship, star: Star, dt: f32) {
-	accel_gravity_ship := accel_of_gravity(ship.position, star.position, star.mass)
-	d_vel := accel_gravity_ship * dt
-	ship.velocity += d_vel
 }
 
 WEDGE_RADIUS_FACTOR :: .9
@@ -1287,6 +1316,8 @@ draw_torpedos :: proc(torps: Torpedos) {
 STARFIELD_JITTER_NOISE_SCALE_FACTOR :: 0.1
 STARFIELD_JITTER_SCALE_FACTOR :: 0.4
 STARFIELD_VELOCITY :: Vec2{50,0}
+STARFIELD_STAR_BRIGHTNESS_MIN :: 0.2
+STARFIELD_STAR_BRIGHTNESS_MAX :: 1.0
 init_starfield :: proc(
 	starfield: ^Starfield,
 	seed: i64,
@@ -1317,7 +1348,13 @@ init_starfield :: proc(
 				jitter_y := f32(jitter_noise_y) * sample_resolution * STARFIELD_JITTER_SCALE_FACTOR
 				pos := Position{math.clamp(x + jitter_x, start_x, start_x + width),
 								math.clamp(y + jitter_y, start_y, start_y + height)}
-				sa.push(starfield_stars, Starfield_Star{position = pos, color = rl.WHITE})
+				brightness_val := (noise.noise_2d(seed + 500, noise_coord) + 1) / 2
+				star := Starfield_Star{position = pos,
+									   color = rl.Color{u8(255 * brightness_val),
+													    u8(255 * brightness_val),
+														u8(255 * brightness_val),
+														u8(255 * brightness_val)}}
+				sa.push(starfield_stars, star)
 				if sa.len(starfield_stars^) > MAX_STARFIELD_STARS {
 					pr("WARN: exceeded max starfield stars of", MAX_STARFIELD_STARS)
 					break
@@ -1438,6 +1475,57 @@ draw_playfield :: proc(gm: Game_Memory) {
 	draw_torpedos(gm.torpedos)
 }
 
+TITLE_BACKGROUND_COLOR :: rl.BLACK
+draw_title :: proc(gm: Game_Memory) {
+	// draw background overlay
+	screen_width := i32(math.round(f32(LOGICAL_SCREEN_WIDTH)))
+	screen_height := i32(math.round(f32(LOGICAL_SCREEN_HEIGHT)))
+	rl.DrawRectangle(-screen_width/2,
+					-screen_height/2,
+					screen_width,
+					screen_height,
+					TITLE_BACKGROUND_COLOR)
+
+	// draw title
+	// TODO: magic numbers
+	{
+		fs :i32= 92
+		title := "Spacewar!"
+		x := get_centered_text_x_coord(title, fs, 0)
+		y := i32(get_screen_top() + 25)
+		rl.DrawText(strings.clone_to_cstring(title, context.temp_allocator), x, y, fs, rl.RED)
+	}
+
+	// draw wedge and needle controls
+	{
+		x: i32 = i32(get_screen_left()) + 50
+		y: i32 = i32(get_screen_top() + 200)
+
+		arr := [?]string{
+			fmt.tprintf("Wedge Controls:"),
+			fmt.tprintf("Rotate: A/D or Gamepad Joystick/D-pad"),
+			fmt.tprintf("Thrust: S or Gamepad A"),
+			fmt.tprintf("Fire: Space or Gamepad X"),
+			fmt.tprintf("Hyperspace: Left-Shift or Gamepad B"),
+			fmt.tprintf(""),
+			fmt.tprintf("Needle Controls:"),
+			fmt.tprintf("Rotate: Left/Right or Gamepad Joystick/D-pad"),
+			fmt.tprintf("Thrust: Down or Gamepad A"),
+			fmt.tprintf("Fire: Right-Control or Gamepad X"),
+			fmt.tprintf("Hyperspace: Right-Shift or Gamepad B"),
+		}
+		debug_overlay_text_column(&x, &y, arr[:], 32, 48)
+	}
+	{
+		bottom_text := fmt.tprintf("First to 10 wins")
+		x := get_centered_text_x_coord(bottom_text, 72, 0)
+		y: i32 = i32(get_screen_bottom()) - 200
+
+		cstr := fmt.ctprint(bottom_text)
+		rl.DrawText(cstr, x, y, 72, rl.YELLOW)
+	}
+	// mention gamepad controls
+}
 
 
 
@@ -1588,7 +1676,8 @@ init_player :: proc(p: ^Player, player_id: Player_ID, ship_type: Ship_Type, posi
 // MISC ///////////////////////////////////////////////////////////////////////////
 
 reset_players :: proc(gm: ^Game_Memory) {
-	pos_a, pos_b := find_ship_spawn_positions()
+	// pos_a, pos_b := find_ship_spawn_positions_random_distance()
+	pos_a, pos_b := find_ship_spawn_positions_same_distance()
 	rng_dir1 := rand.float32() * math.TAU
 	rng_dir2 := rand.float32() * math.TAU
 	init_player(&gm.players[.A], .A, .Wedge, pos_a, rng_dir1)

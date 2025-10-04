@@ -25,7 +25,6 @@ Resource_Manager :: struct {
     sounds: [Sound_ID]rl.Sound,
 	music: [Music_ID]rl.Music,
     // fonts: [Font_ID]rl.Font,
-    // base_font_path: string,
     // transparency_color: rl.Color,
 }
 
@@ -74,6 +73,20 @@ load_all_sounds :: proc(rm: ^Resource_Manager) -> bool {
 			continue
         }
 		rm.sounds[id] = sound
+    }
+    return success
+}
+
+load_all_music :: proc(rm: ^Resource_Manager) -> bool {
+    success := true
+    for id in Music_ID {
+        music, result := load_music_by_id(id)
+        if result != .Success {
+            log.errorf("Failed to load music %v: %v", id, result)
+            success = false
+			continue
+        }
+		rm.music[id] = music
     }
     return success
 }
@@ -136,20 +149,6 @@ load_sound :: proc(filepath: string) -> (sound: rl.Sound, result: Resource_Load_
 	return sound, .Success
 }
 
-load_all_music :: proc(rm: ^Resource_Manager) -> bool {
-    success := true
-    for id in Music_ID {
-        music, result := load_music_by_id(id)
-        if result != .Success {
-            log.errorf("Failed to load music %v: %v", id, result)
-            success = false
-			continue
-        }
-		rm.music[id] = music
-    }
-    return success
-}
-
 load_music_by_id :: proc(id: Music_ID) -> (music: rl.Music, result: Resource_Load_Result) {
 	last_result: Resource_Load_Result
 	for ext in AUDIO_FILE_EXTENSIONS {
@@ -178,6 +177,12 @@ load_music :: proc(filepath: string) -> (music: rl.Music, result: Resource_Load_
 	return music, .Success
 }
 
+make_filepath_from_id_and_extension :: proc {
+    make_filepath_from_id_and_extension_texture,
+    make_filepath_from_id_and_extension_sound,
+	make_filepath_from_id_and_extension_music,
+}
+
 make_filepath_from_id_and_extension_texture :: proc(id: Texture_ID, ext: string) -> string {
     filename := get_name_from_id(id)
 	filepath := fmt.tprintf("%v%v.%v", BASE_TEXTURE_PATH, filename, ext)
@@ -196,11 +201,10 @@ make_filepath_from_id_and_extension_music :: proc(id: Music_ID, ext: string) -> 
 	return filepath
 }
 
-
-make_filepath_from_id_and_extension :: proc {
-    make_filepath_from_id_and_extension_texture,
-    make_filepath_from_id_and_extension_sound,
-	make_filepath_from_id_and_extension_music,
+get_name_from_id :: proc {
+    get_name_from_id_texture,
+    get_name_from_id_sound,
+	get_name_from_id_music,
 }
 
 get_name_from_id_texture :: proc(id: Texture_ID) -> string {
@@ -213,12 +217,6 @@ get_name_from_id_sound :: proc(id: Sound_ID) -> string {
 
 get_name_from_id_music :: proc(id: Music_ID) -> string {
     return strings.to_lower(fmt.tprintf("%v", id), context.temp_allocator)
-}
-
-get_name_from_id :: proc {
-    get_name_from_id_texture,
-    get_name_from_id_sound,
-	get_name_from_id_music,
 }
 
 get_texture :: proc(id: Texture_ID) -> rl.Texture {
@@ -249,6 +247,9 @@ unload_all_assets :: proc(rm: ^Resource_Manager) {
     }
     for id in Sound_ID {
         rl.UnloadSound(rm.sounds[id])
+    }
+    for id in Music_ID {
+        rl.UnloadMusicStream(rm.music[id])
     }
     // for id in Font_ID {
     //     rl.UnloadFont(rm.fonts[id])

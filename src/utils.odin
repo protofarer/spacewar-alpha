@@ -172,12 +172,11 @@ is_real_gamepad :: proc(name: string) -> bool {
 
 // debug utils //////////////////////////////
 
-debug_overlay_text_column :: proc(x,y: ^i32, slice_cstr: []string) {
-	gy: i32 = 20
+debug_overlay_text_column :: proc(x,y: ^i32, slice_cstr: []string, font_size: i32 = 20, gap_y: i32 = 20) {
 	for s in slice_cstr {
 		cstr := fmt.ctprint(s)
-		rl.DrawText(cstr, x^, y^, 20, rl.WHITE)
-		y^ += gy
+		rl.DrawText(cstr, x^, y^, font_size, rl.WHITE)
+		y^ += gap_y
 	}
 }
 
@@ -194,6 +193,7 @@ draw_debug_overlay :: proc() {
 		arr := [?]string{
 			fmt.tprintf("A"),
 			fmt.tprintf("vel: %v", ship.velocity),
+			fmt.tprintf("speed: %v", linalg.length(ship.velocity)),
 			fmt.tprintf("pos: %v", ship.position),
 			fmt.tprintf("rot: %v", math.to_degrees(ship.rotation)),
 			fmt.tprintf("mass: %v", ship.mass),
