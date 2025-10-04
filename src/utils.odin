@@ -137,13 +137,6 @@ get_viewport_offset :: proc() -> (f32,f32) {
 	off_y := -(window_h - viewport_height) / 2
 	return off_x, off_y
 }
-
-update_mouse_transform :: proc() {
-	offx, offy := get_viewport_offset()
-	scale := get_viewport_scale()
-	rl.SetMouseOffset(i32(offx), i32(offy))
-	rl.SetMouseScale(1/scale, 1/scale)
-}
 	
 get_render_rects :: proc() -> (src: Rect, dst: Rect){
 	viewport_width, viewport_height := get_viewport_size()
@@ -155,6 +148,13 @@ get_render_rects :: proc() -> (src: Rect, dst: Rect){
 	src = Rect{0, 0, render_texture_width, -render_texture_height} // negative height flips texture
 	dst = Rect{-offset_x, -offset_y, viewport_width, viewport_height}
 	return src, dst
+}
+
+update_mouse_transform :: proc() {
+	offx, offy := get_viewport_offset()
+	scale := get_viewport_scale()
+	rl.SetMouseOffset(i32(offx), i32(offy))
+	rl.SetMouseScale(1/scale, 1/scale)
 }
 
 is_real_gamepad :: proc(name: string) -> bool {

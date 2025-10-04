@@ -38,7 +38,9 @@ Game_Memory :: struct {
 	debug: bool,
 	pause: bool,
 
+	// TODO: rename rend_text_playfield
 	render_texture: rl.RenderTexture,
+	render_texture_ui: rl.RenderTexture,
 	resman: Resource_Manager,
 	audman: Audio_Manager,
 
@@ -239,9 +241,7 @@ reset_scores :: proc(gm: ^Game_Memory) {
 }
 
 draw :: proc() {
-	rl.BeginTextureMode(g.render_texture)
-	rl.DrawRectangle(0,0,LOGICAL_SCREEN_WIDTH,LOGICAL_SCREEN_HEIGHT, rl.Fade(rl.BLACK, 0.08))
-	
+	// Render playfield
 	camera := rl.Camera2D{
 		zoom = RENDER_TEXTURE_SCALE,
 		offset = { 
@@ -249,65 +249,91 @@ draw :: proc() {
 			get_playfield_bottom() * RENDER_TEXTURE_SCALE,
 		},
 	}
-	rl.BeginMode2D(camera)
+	{
+		rl.BeginTextureMode(g.render_texture)
+		rl.DrawRectangle(0,0,LOGICAL_SCREEN_WIDTH,LOGICAL_SCREEN_HEIGHT, rl.Fade(rl.BLACK, 0.08))
+		
+		rl.BeginMode2D(camera)
 
-	switch g.scene {
-	case .Title:
-		draw_title(g^)
-	case .Play:
-		draw_playfield(g^)
-		draw_topbar(g^)
-	case .End_Round:
-		draw_playfield(g^)
-		draw_topbar(g^)
-		if g.has_end_round_mid_action_played do draw_end_round(g^)
-	case .End_Match:
-		draw_playfield(g^)
-		draw_topbar(g^)
-		draw_end_match(g^)
-	}
+		switch g.scene {
+		case .Title:
+		case .Play:
+			draw_playfield(g^)
+		case .End_Round:
+			draw_playfield(g^)
+		case .End_Match:
+			draw_playfield(g^)
+		}
 
-	if g.debug {
-		draw_debug_origin_axes(get_playfield_left(),
-							   get_playfield_right(),
-							   get_playfield_top(),
-							   get_playfield_bottom())
+		if g.debug {
+			draw_debug_origin_axes(get_playfield_left(),
+								   get_playfield_right(),
+								   get_playfield_top(),
+								   get_playfield_bottom())
 
-		for player in g.players {
-			ship_pos := player.ship.position
-			rot := player.ship.rotation
-			cc := player.ship.collision_circles
-			for circle in sa.slice(&cc) {
-				// circle center is already relative to ship's position, circle.center.x is relative to ship's position and oriented wrt to ship with zero rotation, thus x is horizontal or longitudinal wrt ship, y is vertical or perpendicular wrt to ship's longitude
-				x := ship_pos.x + circle.center.x * math.cos(rot) - circle.center.y * math.sin(rot)
-				y := ship_pos.y + circle.center.x * math.sin(rot) + circle.center.y * math.sin(rot)
-				rl.DrawCircleLines(i32(x), i32(y), circle.radius, rl.BLUE)
+			for player in g.players {
+				ship_pos := player.ship.position
+				rot := player.ship.rotation
+				cc := player.ship.collision_circles
+				for circle in sa.slice(&cc) {
+					// circle center is already relative to ship's position, circle.center.x is relative to ship's position and oriented wrt to ship with zero rotation, thus x is horizontal or longitudinal wrt ship, y is vertical or perpendicular wrt to ship's longitude
+					x := ship_pos.x + circle.center.x * math.cos(rot) - circle.center.y * math.sin(rot)
+					y := ship_pos.y + circle.center.x * math.sin(rot) + circle.center.y * math.sin(rot)
+					rl.DrawCircleLines(i32(x), i32(y), circle.radius, rl.BLUE)
+				}
 			}
 		}
+
+		if g.pause {
+			left := get_playfield_left()
+			top := get_playfield_top()
+			rl.DrawRectangleV({left, top}, {get_playfield_width(), get_playfield_height()}, {0, 0, 0, 128})
+			x := get_centered_text_x_coord("PAUSED", 60, 0)
+			rl.DrawText("PAUSED", x, -30, 60, rl.WHITE)
+		}
+		rl.EndMode2D()  // End the scale transform
+		rl.EndTextureMode()
+	}
+		
+	// UI
+	// TODO: look for other ui-ish elements, or make own render texture: debug, pause, collision circles
+	{
+		rl.BeginTextureMode(g.render_texture_ui)
+		rl.ClearBackground(rl.BLANK)
+		rl.BeginMode2D(camera)
+		switch g.scene {
+		case .Title:
+			draw_title(g^)
+		case .Play:
+			draw_topbar(g^)
+		case .End_Round:
+			draw_topbar(g^)
+			if g.has_end_round_mid_action_played do draw_end_round(g^)
+		case .End_Match:
+			draw_topbar(g^)
+			draw_end_match(g^)
+		}
+
+		rl.EndMode2D()  // End the scale transform
+		rl.EndTextureMode()
 	}
 
-	if g.pause {
-		left := get_playfield_left()
-		top := get_playfield_top()
-		rl.DrawRectangleV({left, top}, {get_playfield_width(), get_playfield_height()}, {0, 0, 0, 128})
-		x := get_centered_text_x_coord("PAUSED", 60, 0)
-		rl.DrawText("PAUSED", x, -30, 60, rl.WHITE)
-	}
-
-	rl.EndMode2D()  // End the scale transform
-	rl.EndTextureMode()
-	
 	rl.BeginDrawing()
 		rl.ClearBackground(LETTERBOX_COLOR)
+
+		src, dst := get_render_rects()
+
 		rl.BeginShaderMode(g.shaders[.FX_Bloom])
-			src, dst := get_render_rects()
 			rl.DrawTexturePro(g.render_texture.texture, src, dst, {}, 0, rl.WHITE)
 		rl.EndShaderMode()
+
+		rl.DrawTexturePro(g.render_texture_ui.texture, src, dst, {}, 0, rl.WHITE)
 
 		if g.debug {
 			draw_debug_overlay() // outside of render texture scaling
 		}
 	rl.EndDrawing()
+
 }
  
 TITLE_DURATION :: 6
@@ -360,6 +386,9 @@ setup :: proc() -> bool {
 		audman = audman,
 		render_texture = rl.LoadRenderTexture(LOGICAL_SCREEN_WIDTH * RENDER_TEXTURE_SCALE, 
 											  LOGICAL_SCREEN_HEIGHT * RENDER_TEXTURE_SCALE),
+		// TODO: set to screen dims, getwindowdims in update loop?
+		render_texture_ui = rl.LoadRenderTexture(LOGICAL_SCREEN_WIDTH * RENDER_TEXTURE_SCALE, 
+												 LOGICAL_SCREEN_HEIGHT * RENDER_TEXTURE_SCALE),
 
 		shaders = shaders,
 		bloom_shader_data = bloom_shader_data,
@@ -473,6 +502,7 @@ game_should_run :: proc() -> bool {
 game_shutdown :: proc() {
 	unload_all_assets(&g.resman)
 	rl.UnloadRenderTexture(g.render_texture)
+	rl.UnloadRenderTexture(g.render_texture_ui)
 	// rl.UnloadFileText(mappings)
 	free(g)
 }
@@ -697,6 +727,9 @@ get_gamepad_input :: proc(gamepad_id: i32) -> Play_Input_Flags {
 }
 
 get_gamepad_inputs :: proc() -> (gamepad_input_a: Play_Input_Flags, gamepad_input_b: Play_Input_Flags) {
+	// TODO: refactor detection to own proc, 
+	// - improve w/ re-detection (hot plugging, reset detected flag every 1 sec)
+	// - store state in struct, more visible
 	@(static) detected := false
 	@(static) gamepad1: i32 = -1
 	@(static) gamepad2: i32 = -1
@@ -709,11 +742,11 @@ get_gamepad_inputs :: proc() -> (gamepad_input_a: Play_Input_Flags, gamepad_inpu
 				if is_real_gamepad(name) {
 					pr("Found gamepad", i, name)
 					if gamepad1 == -1 {
-						pr("assigned",name,"to gamepad1")
+						pr("Assigned gamepad", name, "to gamepad1")
 						gamepad1 = i32(i)
 						detected = true
-					} else {
-						pr("assigned",name,"to gamepad2")
+					} else if gamepad2 == -1 {
+						pr("Assigned gamepad", name, "to gamepad2")
 						gamepad2 = i32(i)
 					}
 					if gamepad1 != -1 && gamepad2 != -1 {
@@ -1479,6 +1512,9 @@ draw_playfield :: proc(gm: Game_Memory) {
 }
 
 TITLE_BACKGROUND_COLOR :: rl.BLACK
+TITLE_FONT_SIZE :: 92
+TITLE_TEXT :: "Spacewar!"
+TITLE_TEXT_COLOR :: rl.RED
 draw_title :: proc(gm: Game_Memory) {
 	// draw background overlay
 	screen_width := i32(math.round(f32(LOGICAL_SCREEN_WIDTH)))
@@ -1490,13 +1526,12 @@ draw_title :: proc(gm: Game_Memory) {
 					TITLE_BACKGROUND_COLOR)
 
 	// draw title
-	// TODO: magic numbers
 	{
-		fs :i32= 92
-		title := "Spacewar!"
+		fs :i32= TITLE_FONT_SIZE
+		title := TITLE_TEXT
 		x := get_centered_text_x_coord(title, fs, 0)
 		y := i32(get_screen_top() + 25)
-		rl.DrawText(strings.clone_to_cstring(title, context.temp_allocator), x, y, fs, rl.RED)
+		rl.DrawText(strings.clone_to_cstring(title, context.temp_allocator), x, y, fs, TITLE_TEXT_COLOR)
 	}
 
 	// draw wedge and needle controls
