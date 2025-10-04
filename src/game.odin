@@ -135,7 +135,7 @@ SHIP_DEFAULT_TORPEDO_COOLDOWN :: 0.8
 SHIP_DEFAULT_HYPERSPACE_DURATION :: 3
 SHIP_DEFAULT_HYPERSPACE_COOLDOWN :: 12
 SHIP_TORPEDO_INITIAL_COUNT :: 32
-SHIP_FUEL_BURN_RATE :: 2
+SHIP_FUEL_BURN_RATE :: 1
 
 Ship_Rotation_Direction :: enum {Left, Right}
 Ship_Type :: enum{Wedge, Needle}
@@ -187,7 +187,7 @@ g: ^Game_Memory
 update :: proc() {
 	dt := rl.GetFrameTime()
 
-	process_global_input()
+	process_global_input(g)
 
 	if g.pause {
 		return
@@ -287,8 +287,11 @@ draw :: proc() {
 	}
 
 	if g.pause {
-		rl.DrawRectangle(0, 0, 90, 90, {0, 0, 0, 180})
-		rl.DrawText("PAUSED", 90, 90, 30, rl.WHITE)
+		left := get_playfield_left()
+		top := get_playfield_top()
+		rl.DrawRectangleV({left, top}, {get_playfield_width(), get_playfield_height()}, {0, 0, 0, 128})
+		x := get_centered_text_x_coord("PAUSED", 60, 0)
+		rl.DrawText("PAUSED", x, -30, 60, rl.WHITE)
 	}
 
 	rl.EndMode2D()  // End the scale transform
@@ -379,7 +382,7 @@ init :: proc() -> bool {
 		log.error("Failed to initialize app state, Game_Memory nil")
 		return false
 	}
-	g.scene = .Play
+	g.scene = .Title
 
 	player_a: Player
 	init_player(&player_a, .A, .Wedge, {-200, -200})
@@ -553,7 +556,7 @@ GLOBAL_INPUT_LOOKUP := [Global_Input]rl.KeyboardKey{
 BLOOM_INTENSITY_INCR :: 0.25
 BLOOM_THRESHOLD_INCR :: 0.025
 BLOOM_SPREAD_INCR :: 0.1
-process_global_input :: proc() {
+process_global_input :: proc(gm: ^Game_Memory) {
 	input: bit_set[Global_Input]
 	for key, input_ in GLOBAL_INPUT_LOOKUP {
 		if rl.IsKeyPressed(key) {
@@ -567,7 +570,7 @@ process_global_input :: proc() {
 		g.app_state = .Exit
 	} else if .Reset in input {
 		game_reset()
-	} else if .Pause in input {
+	} else if .Pause in input && gm.scene == .Play {
 		g.pause = !g.pause
 
 	} else if .Increase_Bloom_Intensity in input {
@@ -1517,14 +1520,20 @@ draw_title :: proc(gm: Game_Memory) {
 		debug_overlay_text_column(&x, &y, arr[:], 32, 48)
 	}
 	{
+		y: i32 = i32(get_screen_bottom()) - 300
 		bottom_text := fmt.tprintf("First to 10 wins")
 		x := get_centered_text_x_coord(bottom_text, 72, 0)
-		y: i32 = i32(get_screen_bottom()) - 200
 
 		cstr := fmt.ctprint(bottom_text)
 		rl.DrawText(cstr, x, y, 72, rl.YELLOW)
+
+		start_text := fmt.tprintf("Press Enter to start!")
+		x2 := get_centered_text_x_coord(start_text, 72, 0)
+		y += 120
+
+		cstr2 := fmt.ctprint(start_text)
+		rl.DrawText(cstr2, x2, y, 72, rl.RED)
 	}
-	// mention gamepad controls
 }
 
 
@@ -1736,5 +1745,5 @@ get_playfield_width :: proc() -> f32 {
 }
 
 get_playfield_height :: proc() -> f32 {
-	return  PLAYFIELD_LENGTH
+	return PLAYFIELD_LENGTH
 }
