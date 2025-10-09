@@ -32,7 +32,6 @@ init_audio_manager :: proc() -> Audio_Manager {
 }
 
 update_audio_manager :: proc() {
-	am := &g.audman
 	if m, ok := get_current_music().?; ok {
 		rl.UpdateMusicStream(m)
 	}
@@ -146,7 +145,6 @@ resume_music :: proc() {
 }
 
 restart_music :: proc() {
-	am := &g.audman
     if m, ok := get_current_music().?; ok {
 		rl.StopMusicStream(m)
 		rl.PlayMusicStream(m)

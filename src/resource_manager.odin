@@ -107,7 +107,6 @@ load_texture :: proc(filepath: string) -> (texture: rl.Texture, result: Resource
 
     if !rl.IsImageValid(image) do return {}, .Load_Error
 
-    // Apply transparency processing
     // rl.ImageColorReplace(&image, rm.transparency_color, rl.BLANK)
 
     texture = rl.LoadTextureFromImage(image)
@@ -122,16 +121,14 @@ load_texture :: proc(filepath: string) -> (texture: rl.Texture, result: Resource
 }
 
 load_sound_by_id :: proc(id: Sound_ID) -> (sound: rl.Sound, result: Resource_Load_Result) {
-	last_result: Resource_Load_Result
 	for ext in AUDIO_FILE_EXTENSIONS {
 		filepath := make_filepath_from_id_and_extension(id, ext)
 		sound, result = load_sound(filepath)
 		if result == .Success {
 			return sound, result
 		} 
-		last_result = result
 	}
-	return {}, last_result
+	return {}, result
 }
 
 load_sound :: proc(filepath: string) -> (sound: rl.Sound, result: Resource_Load_Result) {
@@ -201,6 +198,7 @@ make_filepath_from_id_and_extension_music :: proc(id: Music_ID, ext: string) -> 
 	return filepath
 }
 
+// TODO: just make caall the strings/fmt procs at the call site for this proc group!
 get_name_from_id :: proc {
     get_name_from_id_texture,
     get_name_from_id_sound,

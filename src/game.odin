@@ -66,6 +66,10 @@ Game_Memory :: struct {
 
 	end_match_duration_timer: Timer,
 	end_match_display: string,
+
+	gamepad_detected: bool,
+	gamepad1: i32,
+	gamepad2: i32,
 }
 
 App_State :: enum {
@@ -197,11 +201,36 @@ update :: proc() {
 
 	update_audio_manager()
 
+	detect_and_assign_gamepads :: proc(gm: ^Game_Memory) {
+		// detect & assign
+		if !gm.gamepad_detected {
+			for i in 0..<4 {
+				if rl.IsGamepadAvailable(i32(i)) {
+					name := string(rl.GetGamepadName(i32(i)))
+					if is_real_gamepad(name) {
+						pr("Found gamepad", i, name)
+						if gm.gamepad1 == -1 {
+							pr("Assigned gamepad", name, "to gamepad1")
+							gm.gamepad1 = i32(i)
+							gm.gamepad_detected = true
+						} else if gm.gamepad2 == -1 {
+							pr("Assigned gamepad", name, "to gamepad2")
+							gm.gamepad2 = i32(i)
+						}
+						if gm.gamepad1 != -1 && gm.gamepad2 != -1 {
+							break
+
+						}
+					}
+				}
+			}
+		}
+	}
+	detect_and_assign_gamepads(g)
+
 	switch g.scene {
 	case .Title:
-		if rl.IsKeyPressed(.ENTER) {
-			g.scene = .Play
-		}
+		process_title_input(g)
 	case .Play:
 		update_play_scene(g, dt)
 		
@@ -378,6 +407,7 @@ setup :: proc() -> bool {
 	bloom_shader_data := setup_bloom_shader()
 	shaders[.FX_Bloom] = bloom_shader_data.shader
 
+
 	g^ = Game_Memory {
 		app_state = .Running,
 		debug = false,
@@ -399,6 +429,11 @@ setup :: proc() -> bool {
 
 		end_match_duration_timer = create_timer(END_MATCH_DURATION),
 		end_match_display = "",
+
+		// setup gamepad data
+		gamepad_detected = false,
+		gamepad1 = -1,
+		gamepad2 = -1,
 	}
 	play_music(.Background)
 
@@ -413,14 +448,17 @@ init :: proc() -> bool {
 	}
 	g.scene = .Title
 
-	player_a: Player
-	init_player(&player_a, .A, .Wedge, {-200, -200})
-	g.players[.A] = player_a
+	// tmp test
+	// player_a: Player
+	// init_player(&player_a, .A, .Wedge, {-200, -200})
+	// g.players[.A] = player_a
+	//
+	// player_b: Player
+	// init_player(&player_b, .B, .Needle, {200, -200})
+	// g.players[.B] = player_b
 
-	player_b: Player
-	init_player(&player_b, .B, .Needle, {200, -200})
-	g.players[.B] = player_b
-	// reset_players(g)
+
+	reset_players(g)
 
 	g.central_star = Star{
 		position = {0,0},
@@ -439,8 +477,8 @@ init :: proc() -> bool {
 	ps.thrust_emitters[.Needle] = make_thrust_emitter()
 	g.particle_system = ps
 
-	// tmp
-	g.scores[.A] = 9
+	// tmp test
+	// g.scores[.A] = 9
 
 	return true
 }
@@ -626,7 +664,57 @@ process_global_input :: proc(gm: ^Game_Memory) {
 	}
 }
 
+// Title Input //////////////////////////////////////////////////////////////////////////////
 
+Title_Input :: enum {
+	Start,
+}
+
+Title_Input_Flags :: bit_set[Title_Input]
+
+process_title_input :: proc(gm: ^Game_Memory) {
+	input := get_title_input(gm)
+	if .Start in input {
+		gm.scene = .Play
+	}
+}
+
+get_title_input :: proc(gm: ^Game_Memory) -> Title_Input_Flags {
+	input: Title_Input_Flags
+
+	gamepad_input_a, gamepad_input_b := get_gamepad_title_inputs(gm)
+	input += gamepad_input_a
+	input += gamepad_input_b
+
+	kbd_input := get_keyboard_title_inputs()
+	input += kbd_input
+
+	return input
+}
+
+get_keyboard_title_inputs :: proc() -> Title_Input_Flags {
+	input: Title_Input_Flags
+	if rl.IsKeyPressed(.ENTER) {
+		input += {.Start}
+	}
+	return input
+}
+
+
+get_gamepad_title_inputs :: proc(gm: ^Game_Memory) -> (gamepad_input_a: Title_Input_Flags, gamepad_input_b: Title_Input_Flags) {
+	gamepad_input_a = get_gamepad_title_input(gm.gamepad1)
+	gamepad_input_b = get_gamepad_title_input(gm.gamepad2)
+	return gamepad_input_a, gamepad_input_b
+}
+
+get_gamepad_title_input :: proc(gamepad_id: i32) -> Title_Input_Flags {
+	if gamepad_id == -1 do return {}
+	input: Title_Input_Flags
+	if rl.IsGamepadButtonDown(gamepad_id, rl.GamepadButton.MIDDLE_RIGHT) {
+		input += {.Start}
+	}
+	return input
+}
 
 
 // Play Input //////////////////////////////////////////////////////////////////////////
@@ -651,7 +739,7 @@ process_play_input :: proc(gm: ^Game_Memory) {
 }
 
 get_play_input :: proc(gm: ^Game_Memory) -> (input_a: Play_Input_Flags, input_b: Play_Input_Flags) {
-	gamepad_input_a, gamepad_input_b := get_gamepad_inputs()
+	gamepad_input_a, gamepad_input_b := get_gamepad_play_inputs(gm)
 	input_a = gamepad_input_a
 	input_b = gamepad_input_b
 
@@ -682,7 +770,8 @@ get_keyboard_inputs :: proc() -> (input_a: Play_Input_Flags, input_b: Play_Input
 	if rl.IsKeyDown(.DOWN) {
 		input_b += {.Thrust}
 	}
-	if rl.IsKeyDown(.RIGHT_CONTROL) {
+	// if rl.IsKeyDown(.RIGHT_CONTROL) {
+	if rl.IsKeyDown(.PERIOD) {
 		input_b += {.Fire}
 	}
 	if rl.IsKeyDown(.LEFT) {
@@ -691,16 +780,21 @@ get_keyboard_inputs :: proc() -> (input_a: Play_Input_Flags, input_b: Play_Input
 	if rl.IsKeyDown(.RIGHT) {
 		input_b += {.Rotate_Right}
 	}
-	if rl.IsKeyPressed(.RIGHT_SHIFT) {
+	// if rl.IsKeyPressed(.RIGHT_SHIFT) {
+	if rl.IsKeyPressed(.COMMA) {
 		input_b += {.Hyperspace}
 	}
 
 	return input_a, input_b
 }
 
-GAMEPAD1 :: 0
-GAMEPAD2 :: 1
-get_gamepad_input :: proc(gamepad_id: i32) -> Play_Input_Flags {
+get_gamepad_play_inputs :: proc(gm: ^Game_Memory) -> (gamepad_input_a: Play_Input_Flags, gamepad_input_b: Play_Input_Flags) {
+	gamepad_input_a = get_gamepad_play_input(gm.gamepad1)
+	gamepad_input_b = get_gamepad_play_input(gm.gamepad2)
+	return gamepad_input_a, gamepad_input_b
+}
+
+get_gamepad_play_input :: proc(gamepad_id: i32) -> Play_Input_Flags {
 	if gamepad_id == -1 do return {}
 	input: Play_Input_Flags
 	if rl.IsGamepadButtonDown(gamepad_id, rl.GamepadButton.RIGHT_FACE_DOWN) {
@@ -724,44 +818,6 @@ get_gamepad_input :: proc(gamepad_id: i32) -> Play_Input_Flags {
 	if left_x > 0.5 do input += {.Rotate_Right}
 
 	return input
-}
-
-get_gamepad_inputs :: proc() -> (gamepad_input_a: Play_Input_Flags, gamepad_input_b: Play_Input_Flags) {
-	// TODO: refactor detection to own proc, 
-	// - improve w/ re-detection (hot plugging, reset detected flag every 1 sec)
-	// - store state in struct, more visible
-	@(static) detected := false
-	@(static) gamepad1: i32 = -1
-	@(static) gamepad2: i32 = -1
-
-	// detect & assign
-	if !detected {
-		for i in 0..<4 {
-			if rl.IsGamepadAvailable(i32(i)) {
-				name := string(rl.GetGamepadName(i32(i)))
-				if is_real_gamepad(name) {
-					pr("Found gamepad", i, name)
-					if gamepad1 == -1 {
-						pr("Assigned gamepad", name, "to gamepad1")
-						gamepad1 = i32(i)
-						detected = true
-					} else if gamepad2 == -1 {
-						pr("Assigned gamepad", name, "to gamepad2")
-						gamepad2 = i32(i)
-					}
-					if gamepad1 != -1 && gamepad2 != -1 {
-						break
-
-					}
-				}
-			}
-		}
-	}
-
-	gamepad_input_a = get_gamepad_input(gamepad1)
-	gamepad_input_b = get_gamepad_input(gamepad2)
-
-	return gamepad_input_a, gamepad_input_b
 }
 
 
@@ -971,7 +1027,7 @@ make_ship :: proc(
 	}
 }
 
-MIN_RANDOM_SHIP_SPAWN_RADIUS_WIDTH_RATIO :: 0.2
+MIN_RANDOM_SHIP_SPAWN_RADIUS_WIDTH_RATIO :: 0.3
 MAX_RANDOM_SHIP_SPAWN_RADIUS_WIDTH_RATIO :: 0.8
 find_random_ship_position :: proc() -> (position: Position, angle: f32) {
 	w := get_playfield_width()
@@ -1013,11 +1069,6 @@ find_opposing_ship_position_same_distance :: proc(other_ship_position: Position,
 	// put at: other ship + 180deg +/- 45deg AND some rng_dist
 	dir_a := other_ship_angle
 	dir_b := dir_a + math.PI + (rand.float32() - 0.5) * math.PI/6
-	w := get_playfield_width()
-	r := w / 2
-	// dont spawn close to central star
-	min_r := r * MIN_RANDOM_SHIP_SPAWN_RADIUS_WIDTH_RATIO 
-	max_r := r * MAX_RANDOM_SHIP_SPAWN_RADIUS_WIDTH_RATIO 
 
 	dist := linalg.length(other_ship_position)
 
@@ -1134,6 +1185,7 @@ apply_ship_physics :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flag
 		} 
 
 		// Central star gravity
+		// tmp
 		acc_star := accel_of_gravity(ship.position, gm.central_star.position, gm.central_star.mass)
 		dvel_acc_star := acc_star * dt
 		ship.velocity += dvel_acc_star
@@ -1513,7 +1565,7 @@ draw_playfield :: proc(gm: Game_Memory) {
 
 TITLE_BACKGROUND_COLOR :: rl.BLACK
 TITLE_FONT_SIZE :: 92
-TITLE_TEXT :: "Spacewar!"
+TITLE_TEXT :: "a Spacewar! game"
 TITLE_TEXT_COLOR :: rl.RED
 draw_title :: proc(gm: Game_Memory) {
 	// draw background overlay
@@ -1549,25 +1601,27 @@ draw_title :: proc(gm: Game_Memory) {
 			fmt.tprintf("Needle Controls:"),
 			fmt.tprintf("Rotate: Left/Right or Gamepad Joystick/D-pad"),
 			fmt.tprintf("Thrust: Down or Gamepad A"),
-			fmt.tprintf("Fire: Right-Control or Gamepad X"),
-			fmt.tprintf("Hyperspace: Right-Shift or Gamepad B"),
+			fmt.tprintf("Fire: '.' (period) or Gamepad X"),
+			fmt.tprintf("Hyperspace: ',' (comma) or Gamepad B"),
 		}
 		debug_overlay_text_column(&x, &y, arr[:], 32, 48)
 	}
 	{
 		y: i32 = i32(get_screen_bottom()) - 300
 		bottom_text := fmt.tprintf("First to 10 wins")
-		x := get_centered_text_x_coord(bottom_text, 72, 0)
+		fs_bottom_text : i32 = 50
+		x := get_centered_text_x_coord(bottom_text, fs_bottom_text, 0)
 
 		cstr := fmt.ctprint(bottom_text)
-		rl.DrawText(cstr, x, y, 72, rl.YELLOW)
+		rl.DrawText(cstr, x, y, fs_bottom_text, rl.YELLOW)
 
-		start_text := fmt.tprintf("Press Enter to start!")
-		x2 := get_centered_text_x_coord(start_text, 72, 0)
-		y += 120
+		start_text := fmt.tprintf("Press Enter or Gamepad Start to Play!")
+		fs_start_text : i32 = 50
+		x2 := get_centered_text_x_coord(start_text, fs_start_text, 0)
+		y += 100
 
 		cstr2 := fmt.ctprint(start_text)
-		rl.DrawText(cstr2, x2, y, 72, rl.RED)
+		rl.DrawText(cstr2, x2, y, fs_start_text, rl.RED)
 	}
 }
 
