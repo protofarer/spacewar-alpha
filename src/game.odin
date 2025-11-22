@@ -385,7 +385,6 @@ setup :: proc() -> bool {
 	audman := init_audio_manager()
 
 	resman: Resource_Manager
-	setup_resource_manager(&resman)
 	load_all_assets(&resman)
 
 	starfield: Starfield
@@ -1114,7 +1113,7 @@ update_ship :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flags, dt: 
 	wraparound_spacewar(&ship.position)
 
 	process_timer(&ship.torpedo_cooldown_timer, dt) 
-	if .Fire in input {
+	if .Fire in input && !ship.is_hyperspacing {
 		if is_timer_done(ship.torpedo_cooldown_timer) {
 			if ship.torpedo_count > 0 {
 				pos_torpedo := get_torpedo_fire_position(ship^)
@@ -1185,7 +1184,6 @@ apply_ship_physics :: proc(gm: ^Game_Memory, ship: ^Ship, input: Play_Input_Flag
 		} 
 
 		// Central star gravity
-		// tmp
 		acc_star := accel_of_gravity(ship.position, gm.central_star.position, gm.central_star.mass)
 		dvel_acc_star := acc_star * dt
 		ship.velocity += dvel_acc_star

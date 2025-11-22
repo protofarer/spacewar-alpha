@@ -28,11 +28,6 @@ Resource_Manager :: struct {
     // transparency_color: rl.Color,
 }
 
-setup_resource_manager :: proc(rm: ^Resource_Manager) {
-    log.info("Setup resource manager...")
-    // rm.transparency_color = rl.WHITE
-}
-
 load_all_assets :: proc(rm: ^Resource_Manager) -> bool {
     log.info("Loading game assets...")
 
